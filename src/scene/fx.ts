@@ -63,6 +63,11 @@ class Fx {
     }
   }
 
+  playerStep(running: boolean) {
+    this.sound.footstep('boot');
+    if (running) this.sound.footstep('cloth');
+  }
+
   swing() {
     this.sound.whoosh();
   }

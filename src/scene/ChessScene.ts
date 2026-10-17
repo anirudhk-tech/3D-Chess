@@ -5,10 +5,12 @@ import {
   Clock,
   Color as ThreeColor,
   DirectionalLight,
+  Fog,
   Mesh,
   MeshStandardMaterial,
   PCFSoftShadowMap,
   PerspectiveCamera,
+  PlaneGeometry,
   Scene,
   WebGLRenderer,
 } from 'three';
@@ -19,6 +21,7 @@ import { die, sink, strike, turnTo, walk, yawToward } from './animations';
 import { SQUARE_SIZE, squareToPosition } from './coords';
 import { ParticleSystem } from './effects';
 import { fx } from './fx';
+import { FirstPersonController, type Obstacle } from './firstPerson';
 import { IdleAnimator } from './idle';
 import { Tweens } from './tween';
 
@@ -30,6 +33,7 @@ export class ChessScene {
   private scene = new Scene();
   private camera: PerspectiveCamera;
   private controls: OrbitControls;
+  private firstPerson: FirstPersonController;
   private clock = new Clock();
   private tweens = new Tweens();
   private idle = new IdleAnimator();
@@ -48,7 +52,8 @@ export class ChessScene {
     container.appendChild(this.renderer.domElement);
 
     this.scene.background = new ThreeColor(0x1a1c22);
-    this.camera = new PerspectiveCamera(45, 1, 0.1, 100);
+    this.scene.fog = new Fog(0x1a1c22, 14, 45);
+    this.camera = new PerspectiveCamera(45, 1, 0.05, 120);
     this.camera.position.set(0, 9, 9);
 
     this.controls = new OrbitControls(this.camera, this.renderer.domElement);
@@ -58,11 +63,20 @@ export class ChessScene {
     this.controls.minDistance = 4;
     this.controls.maxDistance = 25;
 
+    this.firstPerson = new FirstPersonController(
+      this.camera,
+      this.renderer.domElement,
+      () => this.obstacles(),
+      (running) => fx.playerStep(running),
+    );
+    this.setView('walk');
+
     this.particles = new ParticleSystem(this.scene);
     fx.attach(this.particles, (amplitude, seconds) => this.shake(amplitude, seconds));
 
     this.buildLights();
     this.buildBoard();
+    this.buildGround();
 
     window.addEventListener('resize', () => this.resize(container));
     this.resize(container);
@@ -103,6 +117,46 @@ export class ChessScene {
     this.scene.add(frame);
   }
 
+  private buildGround() {
+    const ground = new Mesh(
+      new PlaneGeometry(200, 200),
+      new MeshStandardMaterial({ color: 0x2b2a24, roughness: 1 }),
+    );
+    ground.rotation.x = -Math.PI / 2;
+    ground.position.y = -0.45;
+    ground.receiveShadow = true;
+    this.scene.add(ground);
+  }
+
+  private obstacles(): Obstacle[] {
+    return [...this.rigs.values()].map((rig) => ({
+      x: rig.root.position.x,
+      z: rig.root.position.z,
+      radius: rig.type === 'r' ? 0.6 : 0.33,
+    }));
+  }
+
+  get view(): 'walk' | 'overview' {
+    return this.firstPerson.enabled ? 'walk' : 'overview';
+  }
+
+  setView(view: 'walk' | 'overview') {
+    if (view === 'walk') {
+      this.controls.enabled = false;
+      this.firstPerson.activate();
+      return;
+    }
+    this.firstPerson.deactivate();
+    this.controls.enabled = true;
+    this.camera.position.set(0, 9, 9);
+    this.controls.target.set(0, 0, 0);
+    this.controls.update();
+  }
+
+  toggleView() {
+    this.setView(this.view === 'walk' ? 'overview' : 'walk');
+  }
+
   private resize(container: HTMLElement) {
     const { clientWidth: w, clientHeight: h } = container;
     this.renderer.setSize(w, h);
@@ -124,7 +178,8 @@ export class ChessScene {
     this.particles.update(dt);
 
     this.camera.position.sub(this.shakeOffset);
-    this.controls.update();
+    if (this.firstPerson.enabled) this.firstPerson.update(dt);
+    else this.controls.update();
     this.shakeOffset.set(0, 0, 0);
     if (this.shakeRemaining > 0) {
       this.shakeRemaining = Math.max(this.shakeRemaining - dt, 0);

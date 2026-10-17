@@ -1,4 +1,5 @@
 import { Game, type PieceSymbol, type Square } from './engine/game';
+import { IMMORTAL_GAME, loadPosition } from './dev/famousGames';
 import { ChessScene } from './scene/ChessScene';
 import { fx } from './scene/fx';
 import { interpret } from './commands/interpret';
@@ -21,6 +22,7 @@ app.innerHTML = `
     <button id="sound" type="button">Sound: on</button>
     <span id="status"></span>
   </form>
+  <div id="hint">Arrows walk and turn · Shift runs · drag to look · V toggles overview · Space or Mic to speak</div>
 `;
 
 const style = document.createElement('style');
@@ -35,11 +37,12 @@ style.textContent = `
   #mic.listening { background: #b3261e; border-color: #e46962; }
   #mic:disabled { opacity: 0.4; cursor: not-allowed; }
   #sound { padding: 10px 14px; font-size: 14px; border-radius: 8px; border: 1px solid #444; background: #262a33; color: #eee; cursor: pointer; }
+  #hint { position: absolute; right: 16px; bottom: 16px; color: #8a90a0; font-size: 12px; pointer-events: none; }
   #status { color: #cfd3dc; font-size: 14px; }
 `;
 document.head.appendChild(style);
 
-const game = new Game();
+let game = new Game();
 const scene = new ChessScene(document.getElementById('viewport')!);
 scene.sync(game.pieces());
 
@@ -49,6 +52,10 @@ let muted = false;
 
 document.addEventListener('pointerdown', () => fx.unlock());
 document.addEventListener('keydown', () => fx.unlock());
+document.addEventListener('keydown', (event) => {
+  if (event.code !== 'KeyV' || event.repeat || event.target instanceof HTMLInputElement || event.target instanceof HTMLSelectElement) return;
+  scene.toggleView();
+});
 soundButton.addEventListener('click', () => {
   muted = !muted;
   fx.setMuted(muted);
@@ -102,8 +109,20 @@ async function playerMove(event: NonNullable<ReturnType<Game['move']>>, note = '
   await opponentTurn();
 }
 
+function loadDemoPosition() {
+  game = loadPosition(IMMORTAL_GAME);
+  scene.sync(game.pieces());
+  input.value = '';
+  status.textContent = `${IMMORTAL_GAME.name}. ${describeStatus()}`;
+}
+
 async function handleCommand(text: string) {
-  if (busy || game.turn !== PLAYER || game.status().over) return;
+  if (busy) return;
+  if (import.meta.env.DEV && text.toLowerCase() === 'game') {
+    loadDemoPosition();
+    return;
+  }
+  if (game.turn !== PLAYER || game.status().over) return;
   if (!text) return;
 
   const direct = game.move(text);

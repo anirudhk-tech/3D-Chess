@@ -1,5 +1,6 @@
 import { Vector3 } from 'three';
 import type { PieceRig } from './models';
+import { fx } from './fx';
 import { Tweens, easeInOut } from './tween';
 
 const WALK_SPEED = 2.2;
@@ -77,12 +78,17 @@ export function walk(tweens: Tweens, rig: PieceRig, to: Vector3, hop = 0): Promi
   if (distance < 0.01) return Promise.resolve();
   const speed = rig.type === 'r' ? WALK_SPEED * SIEGE_SPEED_FACTOR : WALK_SPEED;
   const seconds = Math.max(distance / speed, MIN_WALK_SECONDS);
+  let lastStep = -1;
   return tweens
     .run(seconds, (t) => {
       rig.root.position.lerpVectors(start, to, easeInOut(t));
       rig.root.position.y = Math.sin(Math.PI * t) * hop;
       const envelope = Math.min(t * 6, 1) * Math.min((1 - t) * 6, 1);
-      applyGait(rig, t * seconds * GAIT_RATE, envelope);
+      const phase = t * seconds * GAIT_RATE;
+      applyGait(rig, phase, envelope);
+      const step = Math.floor(phase / Math.PI);
+      if (step !== lastStep && envelope > 0.3) fx.footstep(rig);
+      lastStep = step;
     })
     .then(() => {
       rig.root.position.y = 0;
@@ -115,6 +121,7 @@ export function strike(tweens: Tweens, rig: PieceRig, onHit: () => void): Promis
   if (rig.ram) return slamRam(tweens, rig, rig.ram, onHit);
   const arm = rig.armR;
   let hit = false;
+  let swung = false;
   const restArm = arm ? restOf(arm) : 0;
   return tweens
     .run(0.7, (t) => {
@@ -128,6 +135,10 @@ export function strike(tweens: Tweens, rig: PieceRig, onHit: () => void): Promis
       }
       const lean = lerp(lerp(0, -0.15, windup), 0.3, swing);
       rig.figure.rotation.x = lerp(lean, 0, easeInOut(recover));
+      if (!swung && t >= 0.45) {
+        swung = true;
+        fx.swing();
+      }
       if (!hit && t >= 0.6) {
         hit = true;
         onHit();
@@ -150,11 +161,12 @@ export function die(tweens: Tweens, rig: PieceRig, knockback: Vector3): Promise<
     rig.root.position.copy(start).addScaledVector(knockback, easeInOut(t));
     if (rig.armL) rig.armL.rotation.x = restOf(rig.armL) - Math.sin(t * Math.PI) * 1.2;
     if (rig.armR) rig.armR.rotation.x = restOf(rig.armR) - Math.sin(t * Math.PI) * 1.2;
-  });
+  }).then(() => fx.fall(rig.root.position));
 }
 
 export function sink(tweens: Tweens, rig: PieceRig): Promise<void> {
   const startY = rig.root.position.y;
+  fx.sink(rig.root.position);
   return tweens.run(0.7, (t) => {
     rig.root.position.y = startY - easeInOut(t) * 1.4;
   });

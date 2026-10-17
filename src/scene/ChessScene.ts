@@ -1,4 +1,5 @@
 import {
+  Vector3,
   AmbientLight,
   BoxGeometry,
   Clock,
@@ -16,6 +17,8 @@ import type { MoveEvent, Piece } from '../engine/game';
 import { createPieceRig, type PieceRig } from './models';
 import { die, sink, strike, turnTo, walk, yawToward } from './animations';
 import { SQUARE_SIZE, squareToPosition } from './coords';
+import { ParticleSystem } from './effects';
+import { fx } from './fx';
 import { IdleAnimator } from './idle';
 import { Tweens } from './tween';
 
@@ -30,6 +33,11 @@ export class ChessScene {
   private clock = new Clock();
   private tweens = new Tweens();
   private idle = new IdleAnimator();
+  private particles: ParticleSystem;
+  private shakeAmplitude = 0;
+  private shakeSeconds = 0;
+  private shakeRemaining = 0;
+  private shakeOffset = new Vector3();
   private rigs = new Map<string, PieceRig>();
 
   constructor(container: HTMLElement) {
@@ -49,6 +57,9 @@ export class ChessScene {
     this.controls.maxPolarAngle = Math.PI / 2.1;
     this.controls.minDistance = 4;
     this.controls.maxDistance = 25;
+
+    this.particles = new ParticleSystem(this.scene);
+    fx.attach(this.particles, (amplitude, seconds) => this.shake(amplitude, seconds));
 
     this.buildLights();
     this.buildBoard();
@@ -99,11 +110,28 @@ export class ChessScene {
     this.camera.updateProjectionMatrix();
   }
 
+  shake(amplitude: number, seconds: number) {
+    if (amplitude < this.shakeAmplitude * (this.shakeRemaining / Math.max(this.shakeSeconds, 0.001))) return;
+    this.shakeAmplitude = amplitude;
+    this.shakeSeconds = seconds;
+    this.shakeRemaining = seconds;
+  }
+
   private frame() {
     const dt = this.clock.getDelta();
     this.tweens.update(dt);
     this.idle.update(dt, this.rigs.values());
+    this.particles.update(dt);
+
+    this.camera.position.sub(this.shakeOffset);
     this.controls.update();
+    this.shakeOffset.set(0, 0, 0);
+    if (this.shakeRemaining > 0) {
+      this.shakeRemaining = Math.max(this.shakeRemaining - dt, 0);
+      const strength = this.shakeAmplitude * (this.shakeRemaining / this.shakeSeconds);
+      this.shakeOffset.set((Math.random() - 0.5) * strength, (Math.random() - 0.5) * strength, (Math.random() - 0.5) * strength);
+      this.camera.position.add(this.shakeOffset);
+    }
     this.renderer.render(this.scene, this.camera);
   }
 
@@ -149,6 +177,10 @@ export class ChessScene {
 
     this.setBusy(involved, false);
 
+    if (event.promotion) fx.promotion(squareToPosition(event.to));
+    if (event.checkmate) fx.checkmate();
+    else if (event.check) fx.check();
+
     if (event.promotion) {
       this.removePiece(event.mover.id);
       this.addPiece({ ...event.mover, type: event.promotion, square: event.to });
@@ -177,6 +209,7 @@ export class ChessScene {
     const approach = victimPosition.clone().sub(from).setY(0).normalize();
     const stopPoint = victimPosition.clone().addScaledVector(approach, -STOP_SHORT);
 
+    if (attacker.type === 'n') fx.whinny();
     await Promise.all([
       turnTo(this.tweens, attacker, yawToward(from, victimPosition)),
       turnTo(this.tweens, victim, yawToward(victimPosition, from)),
@@ -185,6 +218,7 @@ export class ChessScene {
 
     let falling: Promise<void> = Promise.resolve();
     await strike(this.tweens, attacker, () => {
+      fx.hit(attacker, victimPosition);
       falling = die(this.tweens, victim, approach.clone().multiplyScalar(0.3));
     });
     await falling;

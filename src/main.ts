@@ -1,5 +1,6 @@
 import { Game } from './engine/game';
 import { ChessScene } from './scene/ChessScene';
+import { fx } from './scene/fx';
 import { interpret } from './commands/interpret';
 import { chooseWithJev } from './commands/jev';
 
@@ -8,6 +9,7 @@ app.innerHTML = `
   <div id="viewport"></div>
   <form id="command">
     <input id="move" autocomplete="off" placeholder="Give an order, e.g. send the horse out" autofocus />
+    <button id="sound" type="button">Sound: on</button>
     <span id="status"></span>
   </form>
 `;
@@ -19,6 +21,7 @@ style.textContent = `
   #viewport { position: absolute; inset: 0; }
   #command { position: absolute; left: 16px; bottom: 16px; display: flex; gap: 12px; align-items: center; }
   #move { padding: 10px 14px; width: 380px; font-size: 16px; border-radius: 8px; border: 1px solid #444; background: #262a33; color: #eee; }
+  #sound { padding: 10px 14px; font-size: 14px; border-radius: 8px; border: 1px solid #444; background: #262a33; color: #eee; cursor: pointer; }
   #status { color: #cfd3dc; font-size: 14px; }
 `;
 document.head.appendChild(style);
@@ -28,6 +31,16 @@ const scene = new ChessScene(document.getElementById('viewport')!);
 scene.sync(game.pieces());
 
 const input = document.getElementById('move') as HTMLInputElement;
+const soundButton = document.getElementById('sound') as HTMLButtonElement;
+let muted = false;
+
+document.addEventListener('pointerdown', () => fx.unlock());
+document.addEventListener('keydown', () => fx.unlock());
+soundButton.addEventListener('click', () => {
+  muted = !muted;
+  fx.setMuted(muted);
+  soundButton.textContent = muted ? 'Sound: off' : 'Sound: on';
+});
 const status = document.getElementById('status')!;
 let busy = false;
 

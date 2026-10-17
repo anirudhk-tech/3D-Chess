@@ -1,27 +1,29 @@
 import type { Game } from '../engine/game';
-import { buildCandidates, buildMessages } from './prompt';
-import type { Candidate, Complete, Intent } from './types';
+import { buildCandidates, buildChoiceRequest } from './prompt';
+import type { Candidate, Choose, Intent } from './types';
 
-export function parseIntent(raw: string, candidates: Candidate[]): Intent {
-  let parsed: { action?: string; moveId?: string | null; message?: string };
-  try {
-    parsed = JSON.parse(raw);
-  } catch {
-    return { kind: 'none', message: 'Could not understand the reply' };
-  }
-  const message = typeof parsed.message === 'string' ? parsed.message : '';
-  if (parsed.action === 'clarify') return { kind: 'clarify', message };
-  if (parsed.action === 'move') {
-    const chosen = candidates.find((c) => c.id === parsed.moveId);
-    if (!chosen) return { kind: 'none', message: 'That order did not match any legal move' };
-    return { kind: 'move', from: chosen.from, to: chosen.to, promotion: chosen.promotion };
-  }
-  return { kind: 'none', message };
+export interface InterpretOptions {
+  minConfidence: number;
+  random?: () => number;
 }
 
-export async function interpret(transcript: string, game: Game, complete: Complete): Promise<Intent> {
+function toIntent(candidate: Candidate, random: boolean): Intent {
+  return { kind: 'move', from: candidate.from, to: candidate.to, promotion: candidate.promotion, random };
+}
+
+export async function interpret(
+  transcript: string,
+  game: Game,
+  choose: Choose,
+  { minConfidence, random = Math.random }: InterpretOptions,
+): Promise<Intent> {
   const candidates = buildCandidates(game);
   if (candidates.length === 0) return { kind: 'none', message: 'The game is over' };
-  const raw = await complete(buildMessages(transcript, game, candidates));
-  return parseIntent(raw, candidates);
+
+  const answer = await choose(buildChoiceRequest(transcript, game, candidates));
+  const chosen = candidates.find((c) => c.id === answer.choice);
+  if (chosen && answer.confidence >= minConfidence) return toIntent(chosen, false);
+
+  const fallback = candidates[Math.floor(random() * candidates.length)]!;
+  return toIntent(fallback, true);
 }

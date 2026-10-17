@@ -1,7 +1,7 @@
 import { Game } from './engine/game';
 import { ChessScene } from './scene/ChessScene';
 import { interpret } from './commands/interpret';
-import { completeWithOpenAI } from './commands/openai';
+import { chooseWithJev } from './commands/jev';
 
 const app = document.getElementById('app')!;
 app.innerHTML = `
@@ -41,11 +41,11 @@ function describeStatus() {
 
 status.textContent = describeStatus();
 
-async function play(event: NonNullable<ReturnType<Game['move']>>) {
+async function play(event: NonNullable<ReturnType<Game['move']>>, note = '') {
   busy = true;
   await scene.animateMove(event);
   busy = false;
-  status.textContent = describeStatus();
+  status.textContent = note ? `${note} ${describeStatus()}` : describeStatus();
 }
 
 document.getElementById('command')!.addEventListener('submit', async (e) => {
@@ -64,7 +64,7 @@ document.getElementById('command')!.addEventListener('submit', async (e) => {
   busy = true;
   status.textContent = 'Thinking...';
   try {
-    const intent = await interpret(text, game, completeWithOpenAI);
+    const intent = await interpret(text, game, chooseWithJev, { minConfidence: __JEV_MIN_CONFIDENCE__ });
     if (intent.kind !== 'move') {
       status.textContent = intent.message;
       return;
@@ -76,7 +76,7 @@ document.getElementById('command')!.addEventListener('submit', async (e) => {
     }
     input.value = '';
     busy = false;
-    await play(event);
+    await play(event, intent.random ? 'Not sure what you meant, so a piece moved at random.' : '');
   } catch (error) {
     status.textContent = error instanceof Error ? error.message : 'Something went wrong';
   } finally {

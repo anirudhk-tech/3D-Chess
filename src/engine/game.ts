@@ -40,6 +40,7 @@ export const pieceName = (type: PieceSymbol) => NAMES[type];
 export class Game {
   private chess: Chess;
   private byId = new Map<string, Piece>();
+  private events: MoveEvent[] = [];
 
   constructor(fen?: string) {
     this.chess = fen ? new Chess(fen) : new Chess();
@@ -63,6 +64,14 @@ export class Game {
 
   get turn(): Color {
     return this.chess.turn();
+  }
+
+  get lastMove(): MoveEvent | undefined {
+    return this.events[this.events.length - 1];
+  }
+
+  recentMoves(count: number): MoveEvent[] {
+    return this.events.slice(-count).reverse();
   }
 
   get history(): string[] {
@@ -139,6 +148,7 @@ export class Game {
     mover.square = m.to;
     if (m.promotion) mover.type = m.promotion;
 
+    this.events.push(event);
     return event;
   }
 

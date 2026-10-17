@@ -10,13 +10,18 @@ export interface Candidate {
 }
 
 export type Intent =
-  | { kind: 'move'; from: Square; to: Square; promotion?: PieceSymbol }
-  | { kind: 'clarify'; message: string }
+  | { kind: 'move'; from: Square; to: Square; promotion?: PieceSymbol; random: boolean }
   | { kind: 'none'; message: string };
 
-export interface ChatMessage {
-  role: 'system' | 'user';
-  content: string;
+export interface ChoiceRequest {
+  state: Record<string, unknown>;
+  instructions: string;
+  criteria: Record<string, string>;
 }
 
-export type Complete = (messages: ChatMessage[]) => Promise<string>;
+export interface ChoiceAnswer {
+  choice: string;
+  confidence: number;
+}
+
+export type Choose = (request: ChoiceRequest) => Promise<ChoiceAnswer>;

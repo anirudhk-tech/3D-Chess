@@ -95,7 +95,9 @@ describe('SoundBoard', () => {
     board.unlock();
     context().resume.mockRejectedValueOnce(new Error('blocked'));
     context().state = 'suspended';
-    expect(() => { board.unlock(); }).not.toThrow();
+    expect(() => {
+      board.unlock();
+    }).not.toThrow();
     await Promise.resolve();
   });
 
@@ -121,9 +123,15 @@ describe('SoundBoard', () => {
     const board = unlocked();
     await Promise.resolve();
     for (const play of [
-      () => { board.burst({ duration: 0.1, gain: 0.2 }); },
-      () => { board.whinny(); },
-      () => { board.shout(0, 0.1, 150); },
+      () => {
+        board.burst({ duration: 0.1, gain: 0.2 });
+      },
+      () => {
+        board.whinny();
+      },
+      () => {
+        board.shout(0, 0.1, 150);
+      },
     ]) {
       const baseline = context().created.length;
       play();

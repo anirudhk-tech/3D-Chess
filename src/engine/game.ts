@@ -132,7 +132,10 @@ export class Game {
     const capturedFrom = capturedSquare(move);
     const captured = capturedFrom && this.requirePieceAt(capturedFrom);
     const rookSquares = castleRookSquares(move);
-    const rook = rookSquares && this.requirePieceAt(rookSquares.from);
+    const castling = rookSquares && {
+      squares: rookSquares,
+      rook: this.requirePieceAt(rookSquares.from),
+    };
 
     const event: MoveEvent = {
       san: move.san,
@@ -140,14 +143,14 @@ export class Game {
       from: move.from,
       to: move.to,
       captured: captured && { ...captured },
-      castleRook: rook && rookSquares && { piece: { ...rook }, ...rookSquares },
+      castleRook: castling && { piece: { ...castling.rook }, ...castling.squares },
       promotion: move.promotion,
       check: this.chess.inCheck(),
       checkmate: this.chess.isCheckmate(),
     };
 
     if (captured) this.piecesById.delete(captured.id);
-    if (rook && rookSquares) rook.square = rookSquares.to;
+    if (castling) castling.rook.square = castling.squares.to;
     mover.square = move.to;
     if (move.promotion) mover.type = move.promotion;
 

@@ -94,7 +94,9 @@ export class AppView {
       this.mic.blur();
       handlers.onMicClick();
     });
-    this.sound.addEventListener('click', handlers.onSoundClick);
+    this.sound.addEventListener('click', () => {
+      handlers.onSoundClick();
+    });
     this.input.focus();
   }
 

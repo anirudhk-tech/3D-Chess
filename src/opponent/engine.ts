@@ -60,10 +60,16 @@ const TABLES: Record<PieceSymbol, number[]> = {
 
 class OutOfTime extends Error {}
 
+function firstOf<T>(items: readonly T[]): T {
+  const [first] = items;
+  if (first === undefined) throw new Error('Expected a non-empty list');
+  return first;
+}
+
 const isUnderpromotion = (move: Move) => move.promotion !== undefined && move.promotion !== 'q';
 
 function positionalBonus(type: PieceSymbol, row: number, col: number): number {
-  return TABLES[type][row * BOARD_SIZE + col]!;
+  return TABLES[type][row * BOARD_SIZE + col] ?? 0;
 }
 
 function evaluate(chess: Chess): number {
@@ -89,7 +95,9 @@ function orderScore(move: Move): number {
 
 function orderedMoves(chess: Chess, capturesOnly = false): Move[] {
   const moves = chess.moves({ verbose: true }).filter((move) => !isUnderpromotion(move));
-  const pool = capturesOnly ? moves.filter((move) => move.captured || move.promotion) : moves;
+  const pool = capturesOnly
+    ? moves.filter((move) => move.captured !== undefined || move.promotion !== undefined)
+    : moves;
   return pool.sort((a, b) => orderScore(b) - orderScore(a));
 }
 
@@ -153,7 +161,7 @@ class Search {
         ]
       : ordered;
     let alpha = -Infinity;
-    let best = moves[0]!;
+    let best = firstOf(moves);
     for (const move of moves) {
       this.chess.move(move);
       const score = -this.negamax(depth - 1, -Infinity, -alpha, 1);
@@ -177,7 +185,7 @@ export function findBestMove(
   if (legal.length === 0) return null;
 
   const search = new Search(chess, options.timeMs, now);
-  let result: SearchResult = toResult(legal[0]!, 0, 0);
+  let result: SearchResult = toResult(firstOf(legal), 0, 0);
   let previous: Move | undefined;
 
   for (let depth = 1; depth <= options.maxDepth; depth++) {

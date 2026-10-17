@@ -49,13 +49,17 @@ export function audioExtension(mimeType: string): string {
   return 'webm';
 }
 
+function firstNonEmpty(...candidates: (string | undefined)[]): string {
+  return candidates.find((value) => value !== undefined && value !== '') ?? DEFAULT_MIME_TYPE;
+}
+
 export class RecordedSpeech implements VoiceInput {
   private recorder?: RecorderLike;
   private stream?: MediaStream;
   private chunks: Blob[] = [];
   private listening = false;
   private starting = false;
-  private stopRequested = false;
+  private stopsDuringStart = 0;
   private capTimer?: ReturnType<typeof setTimeout>;
   private transcription?: AbortController;
 
@@ -72,7 +76,7 @@ export class RecordedSpeech implements VoiceInput {
     if (this.listening || this.starting) return;
     this.transcription?.abort();
     this.starting = true;
-    this.stopRequested = false;
+    const stopsBeforeStart = this.stopsDuringStart;
     let stream: MediaStream;
     try {
       stream = await this.deps.getStream();
@@ -83,7 +87,7 @@ export class RecordedSpeech implements VoiceInput {
       return;
     }
     this.starting = false;
-    if (this.stopRequested) {
+    if (this.stopsDuringStart !== stopsBeforeStart) {
       this.releaseStream(stream);
       return;
     }
@@ -91,7 +95,7 @@ export class RecordedSpeech implements VoiceInput {
   }
 
   stop() {
-    if (this.starting) this.stopRequested = true;
+    if (this.starting) this.stopsDuringStart++;
     if (!this.listening) return;
     this.listening = false;
     clearTimeout(this.capTimer);
@@ -110,7 +114,7 @@ export class RecordedSpeech implements VoiceInput {
 
   dispose() {
     this.transcription?.abort();
-    this.stopRequested = true;
+    this.stopsDuringStart++;
     if (this.listening) {
       this.listening = false;
       clearTimeout(this.capTimer);
@@ -150,7 +154,9 @@ export class RecordedSpeech implements VoiceInput {
     }
     this.listening = true;
     this.handlers.onStateChange(true);
-    this.capTimer = setTimeout(() => { this.stop(); }, MAX_RECORDING_MS);
+    this.capTimer = setTimeout(() => {
+      this.stop();
+    }, MAX_RECORDING_MS);
   }
 
   private abandonRecording() {
@@ -173,12 +179,14 @@ export class RecordedSpeech implements VoiceInput {
   }
 
   private releaseStream(stream: MediaStream | undefined) {
-    stream?.getTracks().forEach((track) => { track.stop(); });
+    stream?.getTracks().forEach((track) => {
+      track.stop();
+    });
     if (stream === this.stream) this.stream = undefined;
   }
 
   private async finish(recorder: RecorderLike) {
-    const mimeType = recorder.mimeType || this.chunks[0]?.type || DEFAULT_MIME_TYPE;
+    const mimeType = firstNonEmpty(recorder.mimeType, this.chunks[0]?.type);
     const audio = new Blob(this.chunks, { type: mimeType });
     this.chunks = [];
     this.detachRecorder();
@@ -228,7 +236,7 @@ export async function transcribeWithOpenAI(
     response = await fetch(TRANSCRIPTION_ENDPOINT, { method: 'POST', body: form, signal });
   } catch (error) {
     if (isAbort(error)) throw error;
-    throw new Error('Could not reach the transcription service.');
+    throw new Error('Could not reach the transcription service.', { cause: error });
   }
   if (!response.ok) {
     throw new Error(

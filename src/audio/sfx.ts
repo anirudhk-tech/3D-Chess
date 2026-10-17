@@ -1,4 +1,9 @@
-interface FilterSpec { type: BiquadFilterType; freq: number; endFreq?: number; q?: number }
+interface FilterSpec {
+  type: BiquadFilterType;
+  freq: number;
+  endFreq?: number;
+  q?: number;
+}
 
 type Bus = 'main' | 'ambient';
 
@@ -44,13 +49,31 @@ interface SourceChain {
   nodes: AudioNode[];
 }
 
+interface AudioGraph {
+  ctx: AudioContext;
+  master: GainNode;
+  ambientBus: GainNode;
+  output: GainNode;
+  noise: AudioBuffer;
+  bed?: GainNode;
+}
+
+interface AudioScope {
+  AudioContext?: typeof AudioContext;
+  webkitAudioContext?: typeof AudioContext;
+}
+
+function ignoreResumeRejection() {
+  return undefined;
+}
+
+function findAudioContextConstructor() {
+  const scope: AudioScope = window;
+  return scope.AudioContext ?? scope.webkitAudioContext;
+}
+
 export class SoundBoard {
-  private ctx?: AudioContext;
-  private master?: GainNode;
-  private ambientBus?: GainNode;
-  private output?: GainNode;
-  private bed?: GainNode;
-  private noise?: AudioBuffer;
+  private graph?: AudioGraph;
   private mutedState = false;
   private duckedState = false;
 
@@ -59,35 +82,40 @@ export class SoundBoard {
   }
 
   get running() {
-    return this.ctx?.state === 'running';
+    return this.graph?.ctx.state === 'running';
   }
 
   duck(ducked: boolean) {
     this.duckedState = ducked;
-    if (!this.ambientBus || !this.ctx) return;
-    this.ambientBus.gain.setTargetAtTime(
+    if (!this.graph) return;
+    this.graph.ambientBus.gain.setTargetAtTime(
       this.ambientLevel,
-      this.ctx.currentTime,
+      this.graph.ctx.currentTime,
       DUCK_TIME_CONSTANT,
     );
   }
 
   setMuted(muted: boolean) {
     this.mutedState = muted;
-    if (!this.output || !this.ctx) return;
-    this.output.gain.setTargetAtTime(this.outputLevel, this.ctx.currentTime, MUTE_TIME_CONSTANT);
+    if (!this.graph) return;
+    this.graph.output.gain.setTargetAtTime(
+      this.outputLevel,
+      this.graph.ctx.currentTime,
+      MUTE_TIME_CONSTANT,
+    );
   }
 
   unlock() {
-    if (!this.ctx) {
-      const Context =
-        window.AudioContext ??
-        (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
+    let graph = this.graph;
+    if (!graph) {
+      const Context = findAudioContextConstructor();
       if (!Context) return;
-      this.build(new Context());
+      graph = this.build(new Context());
     }
-    const ctx = this.ctx!;
-    if (ctx.state !== 'running' && ctx.state !== 'closed') ctx.resume().catch(() => {});
+    const { ctx } = graph;
+    if (ctx.state !== 'running' && ctx.state !== 'closed') {
+      ctx.resume().catch(ignoreResumeRejection);
+    }
   }
 
   private get ambientLevel() {
@@ -98,19 +126,20 @@ export class SoundBoard {
     return this.mutedState ? 0 : 1;
   }
 
-  private build(ctx: AudioContext) {
-    this.ctx = ctx;
+  private build(ctx: AudioContext): AudioGraph {
     const compressor = ctx.createDynamicsCompressor();
-    this.output = ctx.createGain();
-    this.output.gain.value = this.outputLevel;
-    this.master = ctx.createGain();
-    this.master.gain.value = MASTER_LEVEL;
-    this.ambientBus = ctx.createGain();
-    this.ambientBus.gain.value = this.ambientLevel;
-    this.master.connect(compressor);
-    this.ambientBus.connect(compressor);
-    compressor.connect(this.output).connect(ctx.destination);
-    this.noise = this.buildNoise(ctx);
+    const output = ctx.createGain();
+    output.gain.value = this.outputLevel;
+    const master = ctx.createGain();
+    master.gain.value = MASTER_LEVEL;
+    const ambientBus = ctx.createGain();
+    ambientBus.gain.value = this.ambientLevel;
+    master.connect(compressor);
+    ambientBus.connect(compressor);
+    compressor.connect(output).connect(ctx.destination);
+    const graph: AudioGraph = { ctx, master, ambientBus, output, noise: this.buildNoise(ctx) };
+    this.graph = graph;
+    return graph;
   }
 
   private buildNoise(ctx: AudioContext): AudioBuffer {
@@ -120,24 +149,31 @@ export class SoundBoard {
     return buffer;
   }
 
-  private get ready() {
-    return !!this.ctx && !!this.master && !this.mutedState && this.ctx.state === 'running';
+  private readyGraph(): AudioGraph | undefined {
+    const graph = this.graph;
+    if (!graph || this.mutedState || graph.ctx.state !== 'running') return undefined;
+    return graph;
   }
 
-  private route(node: AudioNode, spec: RouteSpec, nodes: AudioNode[]) {
+  private route(graph: AudioGraph, node: AudioNode, spec: RouteSpec, nodes: AudioNode[]) {
     let tail: AudioNode = node;
     if (spec.pan !== undefined) {
-      const panner = this.ctx!.createStereoPanner();
+      const panner = graph.ctx.createStereoPanner();
       panner.pan.value = spec.pan;
       tail.connect(panner);
       nodes.push(panner);
       tail = panner;
     }
-    tail.connect(spec.bus === 'ambient' ? this.ambientBus! : this.master!);
+    tail.connect(spec.bus === 'ambient' ? graph.ambientBus : graph.master);
   }
 
-  private createFilter(spec: FilterSpec, start: number, end: number): BiquadFilterNode {
-    const filter = this.ctx!.createBiquadFilter();
+  private createFilter(
+    graph: AudioGraph,
+    spec: FilterSpec,
+    start: number,
+    end: number,
+  ): BiquadFilterNode {
+    const filter = graph.ctx.createBiquadFilter();
     filter.type = spec.type;
     filter.Q.value = spec.q ?? 1;
     filter.frequency.setValueAtTime(spec.freq, start);
@@ -145,8 +181,14 @@ export class SoundBoard {
     return filter;
   }
 
-  private envelope(start: number, duration: number, peak: number, attack: number): GainNode {
-    const gain = this.ctx!.createGain();
+  private envelope(
+    graph: AudioGraph,
+    start: number,
+    duration: number,
+    peak: number,
+    attack: number,
+  ): GainNode {
+    const gain = graph.ctx.createGain();
     gain.gain.setValueAtTime(SILENT_GAIN, start);
     gain.gain.exponentialRampToValueAtTime(peak, start + attack);
     gain.gain.exponentialRampToValueAtTime(SILENT_GAIN, start + duration);
@@ -154,6 +196,7 @@ export class SoundBoard {
   }
 
   private connectChain(
+    graph: AudioGraph,
     source: AudioScheduledSourceNode,
     spec: ToneSpec | NoiseSpec,
     start: number,
@@ -162,15 +205,15 @@ export class SoundBoard {
     const nodes: AudioNode[] = [source];
     let tail: AudioNode = source;
     if (spec.filter) {
-      const filter = this.createFilter(spec.filter, start, start + spec.duration);
+      const filter = this.createFilter(graph, spec.filter, start, start + spec.duration);
       source.connect(filter);
       nodes.push(filter);
       tail = filter;
     }
-    const output = this.envelope(start, spec.duration, spec.gain, attack);
+    const output = this.envelope(graph, start, spec.duration, spec.gain, attack);
     tail.connect(output);
     nodes.push(output);
-    this.route(output, spec, nodes);
+    this.route(graph, output, spec, nodes);
     return { output, nodes };
   }
 
@@ -183,27 +226,41 @@ export class SoundBoard {
   }
 
   tone(spec: ToneSpec) {
-    if (!this.ready) return;
-    const ctx = this.ctx!;
+    const graph = this.readyGraph();
+    if (graph) this.playTone(graph, spec);
+  }
+
+  burst(spec: NoiseSpec) {
+    const graph = this.readyGraph();
+    if (graph) this.playBurst(graph, spec);
+  }
+
+  private playTone(graph: AudioGraph, spec: ToneSpec) {
+    const { ctx } = graph;
     const start = ctx.currentTime + (spec.when ?? 0);
     const end = start + spec.duration;
     const osc = ctx.createOscillator();
     osc.type = spec.type ?? 'sine';
     osc.frequency.setValueAtTime(spec.freq, start);
     if (spec.endFreq) osc.frequency.exponentialRampToValueAtTime(spec.endFreq, end);
-    const { nodes } = this.connectChain(osc, spec, start, spec.attack ?? DEFAULT_TONE_ATTACK);
+    const { nodes } = this.connectChain(
+      graph,
+      osc,
+      spec,
+      start,
+      spec.attack ?? DEFAULT_TONE_ATTACK,
+    );
     osc.start(start);
     this.playUntil(osc, end, nodes);
   }
 
-  burst(spec: NoiseSpec) {
-    if (!this.ready) return;
-    const ctx = this.ctx!;
+  private playBurst(graph: AudioGraph, spec: NoiseSpec) {
+    const { ctx } = graph;
     const start = ctx.currentTime + (spec.when ?? 0);
     const source = ctx.createBufferSource();
-    source.buffer = this.noise!;
+    source.buffer = graph.noise;
     source.loop = true;
-    const { nodes } = this.connectChain(source, spec, start, BURST_ATTACK);
+    const { nodes } = this.connectChain(graph, source, spec, start, BURST_ATTACK);
     source.start(start, Math.random());
     this.playUntil(source, start + spec.duration, nodes);
   }
@@ -285,8 +342,9 @@ export class SoundBoard {
   }
 
   whinny() {
-    if (!this.ready) return;
-    const ctx = this.ctx!;
+    const graph = this.readyGraph();
+    if (!graph) return;
+    const { ctx } = graph;
     const start = ctx.currentTime;
     const nodes: AudioNode[] = [];
     const osc = ctx.createOscillator();
@@ -305,8 +363,8 @@ export class SoundBoard {
     filter.type = 'bandpass';
     filter.frequency.value = 1000;
     filter.Q.value = 3;
-    const gain = this.envelope(start, 0.75, 0.25, 0.04);
-    osc.connect(filter).connect(gain).connect(this.master!);
+    const gain = this.envelope(graph, start, 0.75, 0.25, 0.04);
+    osc.connect(filter).connect(gain).connect(graph.master);
     nodes.push(filter, gain);
     osc.start(start);
     vibrato.start(start);
@@ -336,23 +394,28 @@ export class SoundBoard {
   }
 
   checkmate() {
-    [0, 0.5, 1].forEach((when) => { this.tone({ freq: 80, endFreq: 40, duration: 0.4, gain: 0.8, when }); },
-    );
-    [110, 176, 253, 330, 411].forEach((freq) => { this.tone({ freq, duration: 3, gain: 0.2, when: 1.2, attack: 0.01 }); },
-    );
+    [0, 0.5, 1].forEach((when) => {
+      this.tone({ freq: 80, endFreq: 40, duration: 0.4, gain: 0.8, when });
+    });
+    [110, 176, 253, 330, 411].forEach((freq) => {
+      this.tone({ freq, duration: 3, gain: 0.2, when: 1.2, attack: 0.01 });
+    });
   }
 
   promotion() {
-    [523, 659, 784, 1047].forEach((freq, i) => { this.tone({ freq, type: 'triangle', duration: 0.35, gain: 0.2, when: i * 0.09 }); },
-    );
+    [523, 659, 784, 1047].forEach((freq, i) => {
+      this.tone({ freq, type: 'triangle', duration: 0.35, gain: 0.2, when: i * 0.09 });
+    });
   }
 
   startBed() {
-    if (!this.ctx || !this.noise || this.bed) return;
-    const ctx = this.ctx;
-    this.bed = ctx.createGain();
-    this.bed.gain.value = BED_LEVEL;
-    this.bed.connect(this.ambientBus!);
+    const graph = this.graph;
+    if (!graph || graph.bed) return;
+    const { ctx } = graph;
+    const bed = ctx.createGain();
+    bed.gain.value = BED_LEVEL;
+    bed.connect(graph.ambientBus);
+    graph.bed = bed;
 
     const layers: {
       type: BiquadFilterType;
@@ -367,7 +430,7 @@ export class SoundBoard {
     ];
     for (const layer of layers) {
       const source = ctx.createBufferSource();
-      source.buffer = this.noise;
+      source.buffer = graph.noise;
       source.loop = true;
       const filter = ctx.createBiquadFilter();
       filter.type = layer.type;
@@ -380,7 +443,7 @@ export class SoundBoard {
       const depth = ctx.createGain();
       depth.gain.value = layer.level * 0.4;
       lfo.connect(depth).connect(level.gain);
-      source.connect(filter).connect(level).connect(this.bed);
+      source.connect(filter).connect(level).connect(bed);
       source.start(0, Math.random());
       lfo.start();
     }
@@ -412,8 +475,9 @@ export class SoundBoard {
   }
 
   shout(pan: number, volume: number, pitch: number) {
-    if (!this.ready) return;
-    const ctx = this.ctx!;
+    const graph = this.readyGraph();
+    if (!graph) return;
+    const { ctx } = graph;
     const start = ctx.currentTime;
     const duration = 0.45 + Math.random() * 0.4;
     const osc = ctx.createOscillator();
@@ -421,7 +485,7 @@ export class SoundBoard {
     osc.frequency.setValueAtTime(pitch, start);
     osc.frequency.linearRampToValueAtTime(pitch * 1.35, start + duration * 0.35);
     osc.frequency.linearRampToValueAtTime(pitch * 0.8, start + duration);
-    const envelope = this.envelope(start, duration, volume, duration * 0.2);
+    const envelope = this.envelope(graph, start, duration, volume, duration * 0.2);
     const nodes: AudioNode[] = [osc, envelope];
     for (const formant of [700, 1250]) {
       const filter = ctx.createBiquadFilter();
@@ -431,10 +495,10 @@ export class SoundBoard {
       osc.connect(filter).connect(envelope);
       nodes.push(filter);
     }
-    this.route(envelope, { bus: 'ambient', pan }, nodes);
+    this.route(graph, envelope, { bus: 'ambient', pan }, nodes);
     osc.start(start);
     this.playUntil(osc, start + duration, nodes);
-    this.burst({
+    this.playBurst(graph, {
       duration,
       gain: volume * 0.5,
       filter: { type: 'bandpass', freq: 1500, q: 1 },

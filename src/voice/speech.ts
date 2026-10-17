@@ -76,7 +76,9 @@ export class SpeechInput implements VoiceInput {
     recognition.lang = this.lang;
     recognition.continuous = false;
     recognition.interimResults = true;
-    recognition.onresult = (event) => { this.handleResult(event); };
+    recognition.onresult = (event) => {
+      this.handleResult(event);
+    };
     recognition.onerror = (event) => {
       if (!SILENT_ERRORS.has(event.error)) {
         this.handlers.onError(
@@ -84,7 +86,9 @@ export class SpeechInput implements VoiceInput {
         );
       }
     };
-    recognition.onend = () => { this.end(recognition); };
+    recognition.onend = () => {
+      this.end(recognition);
+    };
 
     this.recognition = recognition;
     this.listening = true;
@@ -114,7 +118,8 @@ export class SpeechInput implements VoiceInput {
     let interim = '';
     let final = '';
     for (let i = event.resultIndex; i < event.results.length; i++) {
-      const result = event.results[i]!;
+      const result = event.results[i];
+      if (!result) continue;
       if (result.isFinal) final += result[0].transcript;
       else interim += result[0].transcript;
     }

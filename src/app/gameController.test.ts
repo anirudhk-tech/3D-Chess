@@ -38,7 +38,7 @@ function setup(options: Options = {}) {
     setStatus: vi.fn((text: string) => void statuses.push(text)),
     clearInput: vi.fn(),
     setBusy: vi.fn(),
-    difficulty: options.difficulty ?? ('normal'),
+    difficulty: options.difficulty ?? 'normal',
   };
   const scene = {
     sync: vi.fn(),

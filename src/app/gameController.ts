@@ -148,7 +148,7 @@ export class GameController {
     if (choice === null) return null;
     const played =
       choice && this.game.move({ from: choice.from, to: choice.to, promotion: choice.promotion });
-    return played || this.playRandomLegalMove();
+    return played ?? this.playRandomLegalMove();
   }
 
   private playRandomLegalMove(): MoveEvent | null {

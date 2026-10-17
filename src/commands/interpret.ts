@@ -19,7 +19,9 @@ function toIntent(candidate: Candidate, random: boolean): Intent {
 
 function pickRandom(candidates: Candidate[], random: () => number): Candidate {
   const index = Math.min(Math.floor(random() * candidates.length), candidates.length - 1);
-  return candidates[index]!;
+  const picked = candidates[index];
+  if (picked === undefined) throw new Error('Cannot pick a move from an empty candidate list');
+  return picked;
 }
 
 export async function interpret(

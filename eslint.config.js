@@ -30,6 +30,19 @@ export default tseslint.config(
     languageOptions: { globals: { ...globals.browser } },
   },
   {
+    files: ['src/**/*.test.ts'],
+    rules: {
+      '@typescript-eslint/no-non-null-assertion': 'off',
+      '@typescript-eslint/require-await': 'off',
+      '@typescript-eslint/unbound-method': 'off',
+      '@typescript-eslint/no-empty-function': 'off',
+      '@typescript-eslint/no-unsafe-argument': 'off',
+      '@typescript-eslint/no-unsafe-return': 'off',
+      '@typescript-eslint/no-unsafe-assignment': 'off',
+      '@typescript-eslint/use-unknown-in-catch-callback-variable': 'off',
+    },
+  },
+  {
     files: ['vite.config.ts'],
     languageOptions: { globals: { ...globals.node } },
     rules: { '@typescript-eslint/prefer-nullish-coalescing': 'off' },

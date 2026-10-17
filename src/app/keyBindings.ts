@@ -54,8 +54,12 @@ export function createKeyHandlers(actions: KeyActions) {
 
 export function bindKeys(actions: KeyActions): () => void {
   const handlers = createKeyHandlers(actions);
-  const onKeyDown = (event: KeyboardEvent) => { handlers.keydown(event); };
-  const onKeyUp = (event: KeyboardEvent) => { handlers.keyup(event); };
+  const onKeyDown = (event: KeyboardEvent) => {
+    handlers.keydown(event);
+  };
+  const onKeyUp = (event: KeyboardEvent) => {
+    handlers.keyup(event);
+  };
   document.addEventListener('keydown', onKeyDown);
   document.addEventListener('keyup', onKeyUp);
   window.addEventListener('blur', handlers.blur);

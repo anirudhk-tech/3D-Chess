@@ -16,7 +16,6 @@ import { browserRecognitionFactory } from './voice/speech';
 const root = document.getElementById('app');
 if (!root) throw new Error('Missing #app element');
 
-let controller: GameController;
 let soundOn = true;
 
 const view = new AppView(root, {
@@ -31,7 +30,7 @@ const view = new AppView(root, {
 
 const scene = new ChessScene(view.viewport);
 
-controller = new GameController({
+const controller = new GameController({
   game: new Game(),
   scene,
   opponent: new Opponent(),
@@ -50,13 +49,19 @@ const voice = createVoiceInput(
     recognitionFactory: browserRecognitionFactory(),
   },
   {
-    onInterim: (text) => { view.setInput(text); },
+    onInterim: (text) => {
+      view.setInput(text);
+    },
     onFinal: (text) => {
       view.setInput(text);
       void controller.submit(text);
     },
-    onStatus: (message) => { view.setStatus(message); },
-    onError: (message) => { view.setStatus(message); },
+    onStatus: (message) => {
+      view.setStatus(message);
+    },
+    onError: (message) => {
+      view.setStatus(message);
+    },
     onStateChange: (listening) => {
       view.setListening(listening);
       fx.duckAmbience(listening);
@@ -69,15 +74,21 @@ const voiceControls = voice && createVoiceControls(voice, () => controller.canPl
 if (!voice) view.disableMic('Speech input is not available in this browser');
 
 const disposers = [
-  bindAudioUnlock(() => { fx.unlock(); }),
+  bindAudioUnlock(() => {
+    fx.unlock();
+  }),
   bindKeys({
-    toggleView: () => { scene.toggleView(); },
+    toggleView: () => {
+      scene.toggleView();
+    },
     startListening: () => voiceControls?.press(),
     stopListening: () => voiceControls?.release(),
   }),
 ];
 
 import.meta.hot?.dispose(() => {
-  disposers.forEach((dispose) => { dispose(); });
+  disposers.forEach((dispose) => {
+    dispose();
+  });
   voice?.dispose();
 });

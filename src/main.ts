@@ -1,11 +1,13 @@
 import { Game } from './engine/game';
 import { ChessScene } from './scene/ChessScene';
+import { interpret } from './commands/interpret';
+import { completeWithOpenAI } from './commands/openai';
 
 const app = document.getElementById('app')!;
 app.innerHTML = `
   <div id="viewport"></div>
   <form id="command">
-    <input id="move" autocomplete="off" placeholder="Move in SAN, e.g. e4, Nf3, O-O" autofocus />
+    <input id="move" autocomplete="off" placeholder="Give an order, e.g. send the horse out" autofocus />
     <span id="status"></span>
   </form>
 `;
@@ -16,7 +18,7 @@ style.textContent = `
   #app { position: relative; height: 100%; }
   #viewport { position: absolute; inset: 0; }
   #command { position: absolute; left: 16px; bottom: 16px; display: flex; gap: 12px; align-items: center; }
-  #move { padding: 10px 14px; width: 280px; font-size: 16px; border-radius: 8px; border: 1px solid #444; background: #262a33; color: #eee; }
+  #move { padding: 10px 14px; width: 380px; font-size: 16px; border-radius: 8px; border: 1px solid #444; background: #262a33; color: #eee; }
   #status { color: #cfd3dc; font-size: 14px; }
 `;
 document.head.appendChild(style);
@@ -39,19 +41,45 @@ function describeStatus() {
 
 status.textContent = describeStatus();
 
+async function play(event: NonNullable<ReturnType<Game['move']>>) {
+  busy = true;
+  await scene.animateMove(event);
+  busy = false;
+  status.textContent = describeStatus();
+}
+
 document.getElementById('command')!.addEventListener('submit', async (e) => {
   e.preventDefault();
   if (busy) return;
   const text = input.value.trim();
   if (!text) return;
-  const event = game.move(text);
-  if (!event) {
-    status.textContent = `Illegal move: ${text}`;
+
+  const direct = game.move(text);
+  if (direct) {
+    input.value = '';
+    await play(direct);
     return;
   }
-  input.value = '';
+
   busy = true;
-  await scene.animateMove(event);
-  busy = false;
-  status.textContent = describeStatus();
+  status.textContent = 'Thinking...';
+  try {
+    const intent = await interpret(text, game, completeWithOpenAI);
+    if (intent.kind !== 'move') {
+      status.textContent = intent.message;
+      return;
+    }
+    const event = game.move({ from: intent.from, to: intent.to, promotion: intent.promotion });
+    if (!event) {
+      status.textContent = 'That move is not legal';
+      return;
+    }
+    input.value = '';
+    busy = false;
+    await play(event);
+  } catch (error) {
+    status.textContent = error instanceof Error ? error.message : 'Something went wrong';
+  } finally {
+    busy = false;
+  }
 });

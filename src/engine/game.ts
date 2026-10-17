@@ -46,7 +46,6 @@ export class Game {
     this.assignIds();
   }
 
-  /** Give every piece on the board an ID from its current square. */
   private assignIds() {
     this.byId.clear();
     for (const row of this.chess.board()) {
@@ -78,7 +77,6 @@ export class Game {
     return this.pieces().find((p) => p.square === square);
   }
 
-  /** Legal moves for the side to move, optionally limited to one piece. */
   legalMoves(pieceId?: string): Move[] {
     if (!pieceId) return this.chess.moves({ verbose: true });
     const piece = this.byId.get(pieceId);
@@ -97,10 +95,6 @@ export class Game {
     return { over: false, turn: this.chess.turn(), check: this.chess.inCheck() };
   }
 
-  /**
-   * Play a move given as SAN ("Nf3") or { from, to, promotion }.
-   * Returns null if the move is illegal (the game is left unchanged).
-   */
   move(input: string | { from: Square; to: Square; promotion?: PieceSymbol }): MoveEvent | null {
     let m: Move;
     try {
@@ -114,7 +108,6 @@ export class Game {
     let castleRook: MoveEvent['castleRook'];
 
     if (m.isEnPassant()) {
-      // Captured pawn sits on the destination file, mover's starting rank.
       const sq = (m.to[0]! + m.from[1]!) as Square;
       captured = this.byId.get(this.idAt(sq));
     } else if (m.isCapture()) {

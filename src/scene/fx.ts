@@ -1,4 +1,5 @@
 import { Vector3 } from 'three';
+import { Ambience } from '../audio/ambience';
 import { SoundBoard, type StepKind } from '../audio/sfx';
 import type { PieceRig } from './models';
 import { COLORS, ParticleSystem } from './effects';
@@ -16,6 +17,7 @@ const STEP_KIND: Record<string, StepKind> = {
 
 class Fx {
   readonly sound = new SoundBoard();
+  private ambience = new Ambience(this.sound);
   private particles?: ParticleSystem;
   private shake: ShakeFn = () => {};
 
@@ -26,10 +28,11 @@ class Fx {
 
   unlock() {
     this.sound.unlock();
+    this.ambience.start();
   }
 
   setMuted(muted: boolean) {
-    this.sound.muted = muted;
+    this.sound.setMuted(muted);
   }
 
   private dust(position: Vector3, count: number, size = 0.1, speed = 0.6) {

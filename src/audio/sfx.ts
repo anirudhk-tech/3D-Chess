@@ -1,6 +1,13 @@
 type FilterSpec = { type: BiquadFilterType; freq: number; endFreq?: number; q?: number };
 
-interface ToneSpec {
+type Bus = 'main' | 'ambient';
+
+interface RouteSpec {
+  bus?: Bus;
+  pan?: number;
+}
+
+interface ToneSpec extends RouteSpec {
   freq: number;
   endFreq?: number;
   type?: OscillatorType;
@@ -11,20 +18,34 @@ interface ToneSpec {
   filter?: FilterSpec;
 }
 
-interface NoiseSpec {
+interface NoiseSpec extends RouteSpec {
   duration: number;
   gain: number;
   when?: number;
   filter?: FilterSpec;
 }
 
+const BED_LEVEL = 0.07;
+const AMBIENT_LEVEL = 0.5;
+
 export type StepKind = 'boot' | 'hoof' | 'heavy' | 'cloth';
 
 export class SoundBoard {
   private ctx?: AudioContext;
   private master?: GainNode;
+  private ambientBus?: GainNode;
+  private bed?: GainNode;
   private noise?: AudioBuffer;
-  muted = false;
+  private mutedState = false;
+
+  get muted() {
+    return this.mutedState;
+  }
+
+  setMuted(muted: boolean) {
+    this.mutedState = muted;
+    if (this.bed && this.ctx) this.bed.gain.setTargetAtTime(muted ? 0 : BED_LEVEL, this.ctx.currentTime, 0.1);
+  }
 
   unlock() {
     if (!this.ctx) {
@@ -34,7 +55,11 @@ export class SoundBoard {
       const compressor = this.ctx.createDynamicsCompressor();
       this.master = this.ctx.createGain();
       this.master.gain.value = 0.6;
-      this.master.connect(compressor).connect(this.ctx.destination);
+      this.master.connect(compressor);
+      this.ambientBus = this.ctx.createGain();
+      this.ambientBus.gain.value = AMBIENT_LEVEL;
+      this.ambientBus.connect(compressor);
+      compressor.connect(this.ctx.destination);
       this.noise = this.buildNoise(this.ctx);
     }
     if (this.ctx.state === 'suspended') void this.ctx.resume();
@@ -49,6 +74,18 @@ export class SoundBoard {
 
   private get ready() {
     return !!this.ctx && !!this.master && !this.muted && this.ctx.state === 'running';
+  }
+
+  private route(node: AudioNode, spec: RouteSpec) {
+    const ctx = this.ctx!;
+    let tail: AudioNode = node;
+    if (spec.pan !== undefined) {
+      const panner = ctx.createStereoPanner();
+      panner.pan.value = spec.pan;
+      tail.connect(panner);
+      tail = panner;
+    }
+    tail.connect(spec.bus === 'ambient' ? this.ambientBus! : this.master!);
   }
 
   private applyFilter(ctx: AudioContext, spec: FilterSpec, start: number, end: number): BiquadFilterNode {
@@ -68,7 +105,7 @@ export class SoundBoard {
     return gain;
   }
 
-  private tone(spec: ToneSpec) {
+  tone(spec: ToneSpec) {
     if (!this.ready) return;
     const ctx = this.ctx!;
     const start = ctx.currentTime + (spec.when ?? 0);
@@ -84,12 +121,13 @@ export class SoundBoard {
       osc.connect(filter);
       node = filter;
     }
-    node.connect(gain).connect(this.master!);
+    node.connect(gain);
+    this.route(gain, spec);
     osc.start(start);
     osc.stop(end + 0.05);
   }
 
-  private burst(spec: NoiseSpec) {
+  burst(spec: NoiseSpec) {
     if (!this.ready) return;
     const ctx = this.ctx!;
     const start = ctx.currentTime + (spec.when ?? 0);
@@ -104,7 +142,8 @@ export class SoundBoard {
       source.connect(filter);
       node = filter;
     }
-    node.connect(gain).connect(this.master!);
+    node.connect(gain);
+    this.route(gain, spec);
     source.start(start, Math.random());
     source.stop(end + 0.05);
   }
@@ -211,5 +250,108 @@ export class SoundBoard {
     [523, 659, 784, 1047].forEach((freq, i) =>
       this.tone({ freq, type: 'triangle', duration: 0.35, gain: 0.2, when: i * 0.09 }),
     );
+  }
+
+  startBed() {
+    if (!this.ctx || !this.noise || this.bed) return;
+    const ctx = this.ctx;
+    this.bed = ctx.createGain();
+    this.bed.gain.value = this.mutedState ? 0 : BED_LEVEL;
+    this.bed.connect(this.ambientBus!);
+
+    const layers: { type: BiquadFilterType; freq: number; q: number; level: number; lfoRate: number }[] = [
+      { type: 'bandpass', freq: 350, q: 0.6, level: 1, lfoRate: 0.13 },
+      { type: 'lowpass', freq: 160, q: 0.7, level: 1.4, lfoRate: 0.07 },
+      { type: 'bandpass', freq: 1400, q: 0.8, level: 0.35, lfoRate: 0.21 },
+    ];
+    for (const layer of layers) {
+      const source = ctx.createBufferSource();
+      source.buffer = this.noise;
+      source.loop = true;
+      const filter = ctx.createBiquadFilter();
+      filter.type = layer.type;
+      filter.frequency.value = layer.freq;
+      filter.Q.value = layer.q;
+      const level = ctx.createGain();
+      level.gain.value = layer.level;
+      const lfo = ctx.createOscillator();
+      lfo.frequency.value = layer.lfoRate;
+      const depth = ctx.createGain();
+      depth.gain.value = layer.level * 0.4;
+      lfo.connect(depth).connect(level.gain);
+      source.connect(filter).connect(level).connect(this.bed);
+      source.start(0, Math.random());
+      lfo.start();
+    }
+  }
+
+  distantClash(pan: number, volume: number) {
+    const hits = 1 + Math.floor(Math.random() * 3);
+    for (let i = 0; i < hits; i++) {
+      const when = i * (0.08 + Math.random() * 0.12);
+      const route = { bus: 'ambient' as const, pan };
+      this.burst({ duration: 0.06, gain: volume, when, filter: { type: 'highpass', freq: 2500 }, ...route });
+      for (const base of [1500, 2300, 3100]) {
+        this.tone({
+          freq: base * (0.9 + Math.random() * 0.25),
+          duration: 0.25,
+          gain: volume * 0.25,
+          when,
+          filter: { type: 'lowpass', freq: 4500 },
+          ...route,
+        });
+      }
+    }
+  }
+
+  shout(pan: number, volume: number, pitch: number) {
+    if (!this.ready) return;
+    const ctx = this.ctx!;
+    const start = ctx.currentTime;
+    const duration = 0.45 + Math.random() * 0.4;
+    const osc = ctx.createOscillator();
+    osc.type = 'sawtooth';
+    osc.frequency.setValueAtTime(pitch, start);
+    osc.frequency.linearRampToValueAtTime(pitch * 1.35, start + duration * 0.35);
+    osc.frequency.linearRampToValueAtTime(pitch * 0.8, start + duration);
+    const envelope = this.envelope(ctx, start, duration, volume, duration * 0.2);
+    for (const formant of [700, 1250]) {
+      const filter = ctx.createBiquadFilter();
+      filter.type = 'bandpass';
+      filter.frequency.value = formant;
+      filter.Q.value = 5;
+      osc.connect(filter).connect(envelope);
+    }
+    this.route(envelope, { bus: 'ambient', pan });
+    osc.start(start);
+    osc.stop(start + duration + 0.05);
+    this.burst({
+      duration,
+      gain: volume * 0.5,
+      filter: { type: 'bandpass', freq: 1500, q: 1 },
+      bus: 'ambient',
+      pan,
+    });
+  }
+
+  drum(pan: number, volume: number) {
+    for (const when of [0, 0.45]) {
+      this.tone({ freq: 95, endFreq: 45, duration: 0.4, gain: volume, when, bus: 'ambient', pan });
+      this.burst({ duration: 0.15, gain: volume * 0.4, when, filter: { type: 'lowpass', freq: 250 }, bus: 'ambient', pan });
+    }
+  }
+
+  horn(pan: number, volume: number) {
+    this.tone({
+      freq: 146,
+      endFreq: 155,
+      type: 'sawtooth',
+      duration: 2,
+      gain: volume,
+      attack: 0.35,
+      filter: { type: 'lowpass', freq: 650 },
+      bus: 'ambient',
+      pan,
+    });
   }
 }

@@ -1,11 +1,11 @@
 import { findBestMove, type SearchOptions } from './engine';
 
-interface Request {
+interface SearchRequest {
   fen: string;
   options: SearchOptions;
 }
 
-self.onmessage = (event: MessageEvent<Request>) => {
+self.onmessage = (event: MessageEvent<SearchRequest>) => {
   const { fen, options } = event.data;
   self.postMessage(findBestMove(fen, options));
 };

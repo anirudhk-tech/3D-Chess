@@ -1,5 +1,3 @@
-// AI GENERATED CHESS OPPONENT ENGINE CODE. Plays at casual club level
-
 import { Chess, type Move, type PieceSymbol, type Square } from 'chess.js';
 
 export interface SearchOptions {
@@ -17,54 +15,68 @@ export interface SearchResult {
 }
 
 const MATE = 100_000;
+const MAX_MATE_PLY = 100;
+const MATE_THRESHOLD = MATE - MAX_MATE_PLY;
 const QUIESCENCE_DEPTH = 4;
 const TIME_CHECK_INTERVAL = 256;
 
 const VALUES: Record<PieceSymbol, number> = { p: 100, n: 320, b: 330, r: 500, q: 900, k: 0 };
 
+const BOARD_SIZE = 8;
+
 const TABLES: Record<PieceSymbol, number[]> = {
   p: [
-    0, 0, 0, 0, 0, 0, 0, 0, 50, 50, 50, 50, 50, 50, 50, 50, 10, 10, 20, 30, 30, 20, 10, 10, 5, 5, 10, 25, 25, 10, 5, 5, 0, 0, 0,
-    20, 20, 0, 0, 0, 5, -5, -10, 0, 0, -10, -5, 5, 5, 10, 10, -20, -20, 10, 10, 5, 0, 0, 0, 0, 0, 0, 0, 0,
+    0, 0, 0, 0, 0, 0, 0, 0, 50, 50, 50, 50, 50, 50, 50, 50, 10, 10, 20, 30, 30, 20, 10, 10, 5, 5,
+    10, 25, 25, 10, 5, 5, 0, 0, 0, 20, 20, 0, 0, 0, 5, -5, -10, 0, 0, -10, -5, 5, 5, 10, 10, -20,
+    -20, 10, 10, 5, 0, 0, 0, 0, 0, 0, 0, 0,
   ],
   n: [
-    -50, -40, -30, -30, -30, -30, -40, -50, -40, -20, 0, 0, 0, 0, -20, -40, -30, 0, 10, 15, 15, 10, 0, -30, -30, 5, 15, 20, 20, 15, 5,
-    -30, -30, 0, 15, 20, 20, 15, 0, -30, -30, 5, 10, 15, 15, 10, 5, -30, -40, -20, 0, 5, 5, 0, -20, -40, -50, -40, -30, -30, -30,
-    -30, -40, -50,
+    -50, -40, -30, -30, -30, -30, -40, -50, -40, -20, 0, 0, 0, 0, -20, -40, -30, 0, 10, 15, 15, 10,
+    0, -30, -30, 5, 15, 20, 20, 15, 5, -30, -30, 0, 15, 20, 20, 15, 0, -30, -30, 5, 10, 15, 15, 10,
+    5, -30, -40, -20, 0, 5, 5, 0, -20, -40, -50, -40, -30, -30, -30, -30, -40, -50,
   ],
   b: [
-    -20, -10, -10, -10, -10, -10, -10, -20, -10, 0, 0, 0, 0, 0, 0, -10, -10, 0, 5, 10, 10, 5, 0, -10, -10, 5, 5, 10, 10, 5, 5, -10,
-    -10, 0, 10, 10, 10, 10, 0, -10, -10, 10, 10, 10, 10, 10, 10, -10, -10, 5, 0, 0, 0, 0, 5, -10, -20, -10, -10, -10, -10, -10, -10,
-    -20,
+    -20, -10, -10, -10, -10, -10, -10, -20, -10, 0, 0, 0, 0, 0, 0, -10, -10, 0, 5, 10, 10, 5, 0,
+    -10, -10, 5, 5, 10, 10, 5, 5, -10, -10, 0, 10, 10, 10, 10, 0, -10, -10, 10, 10, 10, 10, 10, 10,
+    -10, -10, 5, 0, 0, 0, 0, 5, -10, -20, -10, -10, -10, -10, -10, -10, -20,
   ],
   r: [
-    0, 0, 0, 0, 0, 0, 0, 0, 5, 10, 10, 10, 10, 10, 10, 5, -5, 0, 0, 0, 0, 0, 0, -5, -5, 0, 0, 0, 0, 0, 0, -5, -5, 0, 0, 0, 0, 0, 0,
-    -5, -5, 0, 0, 0, 0, 0, 0, -5, -5, 0, 0, 0, 0, 0, 0, -5, 0, 0, 0, 5, 5, 0, 0, 0,
+    0, 0, 0, 0, 0, 0, 0, 0, 5, 10, 10, 10, 10, 10, 10, 5, -5, 0, 0, 0, 0, 0, 0, -5, -5, 0, 0, 0, 0,
+    0, 0, -5, -5, 0, 0, 0, 0, 0, 0, -5, -5, 0, 0, 0, 0, 0, 0, -5, -5, 0, 0, 0, 0, 0, 0, -5, 0, 0, 0,
+    5, 5, 0, 0, 0,
   ],
   q: [
-    -20, -10, -10, -5, -5, -10, -10, -20, -10, 0, 0, 0, 0, 0, 0, -10, -10, 0, 5, 5, 5, 5, 0, -10, -5, 0, 5, 5, 5, 5, 0, -5, 0, 0, 5,
-    5, 5, 5, 0, -5, -10, 5, 5, 5, 5, 5, 0, -10, -10, 0, 5, 0, 0, 0, 0, -10, -20, -10, -10, -5, -5, -10, -10, -20,
+    -20, -10, -10, -5, -5, -10, -10, -20, -10, 0, 0, 0, 0, 0, 0, -10, -10, 0, 5, 5, 5, 5, 0, -10,
+    -5, 0, 5, 5, 5, 5, 0, -5, 0, 0, 5, 5, 5, 5, 0, -5, -10, 5, 5, 5, 5, 5, 0, -10, -10, 0, 5, 0, 0,
+    0, 0, -10, -20, -10, -10, -5, -5, -10, -10, -20,
   ],
   k: [
-    -30, -40, -40, -50, -50, -40, -40, -30, -30, -40, -40, -50, -50, -40, -40, -30, -30, -40, -40, -50, -50, -40, -40, -30, -30, -40,
-    -40, -50, -50, -40, -40, -30, -20, -30, -30, -40, -40, -30, -30, -20, -10, -20, -20, -20, -20, -20, -20, -10, 20, 20, 0, 0, 0,
-    0, 20, 20, 20, 30, 10, 0, 0, 10, 30, 20,
+    -30, -40, -40, -50, -50, -40, -40, -30, -30, -40, -40, -50, -50, -40, -40, -30, -30, -40, -40,
+    -50, -50, -40, -40, -30, -30, -40, -40, -50, -50, -40, -40, -30, -20, -30, -30, -40, -40, -30,
+    -30, -20, -10, -20, -20, -20, -20, -20, -20, -10, 20, 20, 0, 0, 0, 0, 20, 20, 20, 30, 10, 0, 0,
+    10, 30, 20,
   ],
 };
 
 class OutOfTime extends Error {}
 
+const isUnderpromotion = (move: Move) => move.promotion !== undefined && move.promotion !== 'q';
+
+function positionalBonus(type: PieceSymbol, row: number, col: number): number {
+  return TABLES[type][row * BOARD_SIZE + col]!;
+}
+
 function evaluate(chess: Chess): number {
   let score = 0;
   const board = chess.board();
-  for (let row = 0; row < 8; row++) {
-    for (let col = 0; col < 8; col++) {
-      const cell = board[row]![col];
-      if (!cell) continue;
-      if (cell.color === 'w') score += VALUES[cell.type] + TABLES[cell.type][row * 8 + col]!;
-      else score -= VALUES[cell.type] + TABLES[cell.type][(7 - row) * 8 + col]!;
-    }
-  }
+  board.forEach((rank, row) => {
+    rank.forEach((cell, col) => {
+      if (!cell) return;
+      const tableRow = cell.color === 'w' ? row : BOARD_SIZE - 1 - row;
+      const value = VALUES[cell.type] + positionalBonus(cell.type, tableRow, col);
+      score += cell.color === 'w' ? value : -value;
+    });
+  });
   return chess.turn() === 'w' ? score : -score;
 }
 
@@ -76,8 +88,8 @@ function orderScore(move: Move): number {
 }
 
 function orderedMoves(chess: Chess, capturesOnly = false): Move[] {
-  const moves = chess.moves({ verbose: true }).filter((m) => !m.promotion || m.promotion === 'q');
-  const pool = capturesOnly ? moves.filter((m) => m.captured || m.promotion) : moves;
+  const moves = chess.moves({ verbose: true }).filter((move) => !isUnderpromotion(move));
+  const pool = capturesOnly ? moves.filter((move) => move.captured || move.promotion) : moves;
   return pool.sort((a, b) => orderScore(b) - orderScore(a));
 }
 
@@ -94,7 +106,8 @@ class Search {
   }
 
   private tick() {
-    if (++this.nodes % TIME_CHECK_INTERVAL === 0 && this.now() > this.deadline) throw new OutOfTime();
+    if (++this.nodes % TIME_CHECK_INTERVAL === 0 && this.now() > this.deadline)
+      throw new OutOfTime();
   }
 
   private quiesce(alpha: number, beta: number, depth: number): number {
@@ -104,7 +117,7 @@ class Search {
     let best = standPat;
     alpha = Math.max(alpha, standPat);
     for (const move of orderedMoves(this.chess, true)) {
-      this.chess.move(move.san);
+      this.chess.move(move);
       const score = -this.quiesce(-beta, -alpha, depth - 1);
       this.chess.undo();
       if (score > best) best = score;
@@ -121,7 +134,7 @@ class Search {
     if (depth === 0) return this.quiesce(alpha, beta, QUIESCENCE_DEPTH);
     let best = -Infinity;
     for (const move of orderedMoves(this.chess)) {
-      this.chess.move(move.san);
+      this.chess.move(move);
       const score = -this.negamax(depth - 1, -beta, -alpha, ply + 1);
       this.chess.undo();
       if (score > best) best = score;
@@ -132,14 +145,17 @@ class Search {
   }
 
   searchRoot(depth: number, previousBest?: Move): { move: Move; score: number } {
-    let moves = orderedMoves(this.chess);
-    if (previousBest) {
-      moves = [...moves.filter((m) => m.san === previousBest.san), ...moves.filter((m) => m.san !== previousBest.san)];
-    }
+    const ordered = orderedMoves(this.chess);
+    const moves = previousBest
+      ? [
+          ...ordered.filter((move) => move.lan === previousBest.lan),
+          ...ordered.filter((move) => move.lan !== previousBest.lan),
+        ]
+      : ordered;
     let alpha = -Infinity;
     let best = moves[0]!;
     for (const move of moves) {
-      this.chess.move(move.san);
+      this.chess.move(move);
       const score = -this.negamax(depth - 1, -Infinity, -alpha, 1);
       this.chess.undo();
       if (score > alpha) {
@@ -151,7 +167,11 @@ class Search {
   }
 }
 
-export function findBestMove(fen: string, options: SearchOptions, now: () => number = Date.now): SearchResult | null {
+export function findBestMove(
+  fen: string,
+  options: SearchOptions,
+  now: () => number = Date.now,
+): SearchResult | null {
   const chess = new Chess(fen);
   const legal = orderedMoves(chess);
   if (legal.length === 0) return null;
@@ -165,7 +185,7 @@ export function findBestMove(fen: string, options: SearchOptions, now: () => num
       const { move, score } = search.searchRoot(depth, previous);
       previous = move;
       result = toResult(move, score, depth);
-      if (Math.abs(score) > MATE - 100) break;
+      if (Math.abs(score) > MATE_THRESHOLD) break;
     } catch (error) {
       if (!(error instanceof OutOfTime)) throw error;
       break;

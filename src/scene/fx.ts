@@ -1,12 +1,15 @@
 import { Vector3 } from 'three';
 import { Ambience } from '../audio/ambience';
 import { SoundBoard, type StepKind } from '../audio/sfx';
+import type { PieceSymbol } from '../engine/game';
 import type { PieceRig } from './models';
-import { COLORS, ParticleSystem } from './effects';
+import { COLORS, type ParticleSystem } from './effects';
 
 type ShakeFn = (amplitude: number, seconds: number) => void;
 
-const STEP_KIND: Record<string, StepKind> = {
+const noShake: ShakeFn = () => undefined;
+
+const STEP_KIND: Record<PieceSymbol, StepKind> = {
   p: 'boot',
   k: 'boot',
   n: 'hoof',
@@ -19,11 +22,16 @@ class Fx {
   readonly sound = new SoundBoard();
   private ambience = new Ambience(this.sound);
   private particles?: ParticleSystem;
-  private shake: ShakeFn = () => {};
+  private shake: ShakeFn = noShake;
 
   attach(particles: ParticleSystem, shake: ShakeFn) {
     this.particles = particles;
     this.shake = shake;
+  }
+
+  detach() {
+    this.particles = undefined;
+    this.shake = noShake;
   }
 
   unlock() {
@@ -53,7 +61,7 @@ class Fx {
   }
 
   footstep(rig: PieceRig) {
-    const kind = STEP_KIND[rig.type] ?? 'boot';
+    const kind = STEP_KIND[rig.type];
     this.sound.footstep(kind);
     if (kind === 'heavy') {
       this.dust(rig.root.position, 6, 0.14, 0.9);

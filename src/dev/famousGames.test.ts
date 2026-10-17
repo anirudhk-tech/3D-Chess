@@ -18,7 +18,8 @@ describe('IMMORTAL_GAME', () => {
   });
 
   it('has most of the army still on the board', () => {
-    const count = (color: 'w' | 'b', type: string) => game.pieces().filter((p) => p.color === color && p.type === type).length;
+    const count = (color: 'w' | 'b', type: string) =>
+      game.pieces().filter((p) => p.color === color && p.type === type).length;
     expect(count('w', 'q')).toBe(1);
     expect(count('b', 'q')).toBe(1);
     expect(count('w', 'r')).toBe(2);

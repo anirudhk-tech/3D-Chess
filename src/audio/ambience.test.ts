@@ -56,4 +56,45 @@ describe('Ambience', () => {
     }
     ambience.stop();
   });
+
+  it('leaves no timers behind after stop(), including pending crowd shouts', () => {
+    const voice = fakeVoice();
+    vi.spyOn(Math, 'random').mockReturnValue(0.5);
+    const ambience = new Ambience(voice);
+    ambience.start();
+    vi.advanceTimersByTime(1_300);
+    expect(vi.getTimerCount()).toBeGreaterThan(0);
+    ambience.stop();
+    expect(vi.getTimerCount()).toBe(0);
+    vi.restoreAllMocks();
+  });
+
+  it('drops shouts scheduled before stop() when restarted', () => {
+    const voice = fakeVoice();
+    vi.spyOn(Math, 'random').mockReturnValue(0.5);
+    const ambience = new Ambience(voice);
+    ambience.start();
+    vi.advanceTimersByTime(1_300);
+    const shoutsBefore = voice.shout.mock.calls.length;
+    ambience.stop();
+    ambience.start();
+    expect(voice.startBed).toHaveBeenCalledTimes(2);
+    vi.advanceTimersByTime(1);
+    expect(voice.shout.mock.calls.length).toBe(shoutsBefore);
+    ambience.stop();
+    vi.restoreAllMocks();
+  });
+
+  it('fires crowd shouts for rolls in the crowd band', () => {
+    const voice = fakeVoice();
+    vi.spyOn(Math, 'random').mockReturnValue(0.5);
+    const ambience = new Ambience(voice);
+    ambience.start();
+    vi.advanceTimersByTime(5_000);
+    ambience.stop();
+    expect(voice.shout).toHaveBeenCalled();
+    expect(voice.distantClash).not.toHaveBeenCalled();
+    for (const [pan] of voice.shout.mock.calls) expect(Math.abs(pan)).toBeLessThanOrEqual(1);
+    vi.restoreAllMocks();
+  });
 });

@@ -1,0 +1,100 @@
+:root {
+  --bg: #1a1c22;
+  --surface: #262a33;
+  --border: #444;
+  --text: #eee;
+  --text-muted: #cfd3dc;
+  --text-faint: #8a90a0;
+  --danger: #b3261e;
+  --danger-border: #e46962;
+  --focus: #7fb4ff;
+  --radius: 8px;
+}
+
+html,
+body {
+  margin: 0;
+  height: 100%;
+  background: var(--bg);
+  font-family: system-ui, sans-serif;
+}
+
+#app {
+  position: relative;
+  height: 100%;
+}
+
+#viewport {
+  position: absolute;
+  inset: 0;
+}
+
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+#command {
+  position: absolute;
+  left: 16px;
+  bottom: 16px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  align-items: center;
+  max-width: calc(100% - 32px);
+}
+
+.control {
+  padding: 10px 14px;
+  font-size: 14px;
+  border-radius: var(--radius);
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--text);
+}
+
+button.control {
+  cursor: pointer;
+}
+
+#move {
+  width: 380px;
+  max-width: 100%;
+  font-size: 16px;
+}
+
+.control:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
+
+.control:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+#mic.listening {
+  background: var(--danger);
+  border-color: var(--danger-border);
+}
+
+#status {
+  color: var(--text-muted);
+  font-size: 14px;
+}
+
+#hint {
+  position: absolute;
+  right: 16px;
+  bottom: 16px;
+  color: var(--text-faint);
+  font-size: 12px;
+  pointer-events: none;
+}

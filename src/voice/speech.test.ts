@@ -19,14 +19,22 @@ class FakeRecognition implements RecognitionLike {
     this.onend?.();
   }
   emit(transcripts: { text: string; final: boolean }[], resultIndex = 0) {
-    const results = transcripts.map((t) => Object.assign([{ transcript: t.text }], { isFinal: t.final }));
+    const results = transcripts.map((t) =>
+      Object.assign([{ transcript: t.text }], { isFinal: t.final }),
+    );
     this.onresult?.({ resultIndex, results } as unknown as RecognitionEvent);
   }
 }
 
 function setup() {
   const fake = new FakeRecognition();
-  const handlers = { onInterim: vi.fn(), onFinal: vi.fn(), onError: vi.fn(), onStateChange: vi.fn() };
+  const handlers = {
+    onInterim: vi.fn(),
+    onFinal: vi.fn(),
+    onStatus: vi.fn(),
+    onError: vi.fn(),
+    onStateChange: vi.fn(),
+  };
   const input = new SpeechInput(() => fake, handlers);
   return { fake, handlers, input };
 }
@@ -62,7 +70,13 @@ describe('SpeechInput', () => {
 
   it('ignores a second start while already listening', () => {
     const factory = vi.fn(() => new FakeRecognition());
-    const input = new SpeechInput(factory, { onInterim: vi.fn(), onFinal: vi.fn(), onError: vi.fn(), onStateChange: vi.fn() });
+    const input = new SpeechInput(factory, {
+      onInterim: vi.fn(),
+      onFinal: vi.fn(),
+      onStatus: vi.fn(),
+      onError: vi.fn(),
+      onStateChange: vi.fn(),
+    });
     input.start();
     input.start();
     expect(factory).toHaveBeenCalledTimes(1);
@@ -75,6 +89,41 @@ describe('SpeechInput', () => {
     expect(handlers.onError).toHaveBeenLastCalledWith(expect.stringContaining('denied'));
     fake.onerror?.({ error: 'weird' });
     expect(handlers.onError).toHaveBeenLastCalledWith('Speech recognition error: weird');
+  });
+
+  it('does not report an aborted recognition as an error', () => {
+    const { fake, handlers, input } = setup();
+    input.start();
+    fake.onerror?.({ error: 'aborted' });
+    expect(handlers.onError).not.toHaveBeenCalled();
+  });
+
+  it('recovers when the browser refuses to start recognition', () => {
+    const fake = new FakeRecognition();
+    fake.start = () => {
+      throw new Error('already started');
+    };
+    const handlers = {
+      onInterim: vi.fn(),
+      onFinal: vi.fn(),
+      onStatus: vi.fn(),
+      onError: vi.fn(),
+      onStateChange: vi.fn(),
+    };
+    const input = new SpeechInput(() => fake, handlers);
+    input.start();
+    expect(input.isListening).toBe(false);
+    expect(handlers.onStateChange).toHaveBeenLastCalledWith(false);
+    expect(handlers.onError).toHaveBeenCalledWith(expect.stringContaining('microphone'));
+  });
+
+  it('aborts and goes quiet on dispose', () => {
+    const { fake, handlers, input } = setup();
+    input.start();
+    input.dispose();
+    expect(input.isListening).toBe(false);
+    fake.emit([{ text: 'late', final: true }]);
+    expect(handlers.onFinal).not.toHaveBeenCalled();
   });
 
   it('toggles between listening and stopped', () => {

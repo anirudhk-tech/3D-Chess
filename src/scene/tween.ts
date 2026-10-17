@@ -1,14 +1,21 @@
-export interface Tween {
+export const lerp = (from: number, to: number, t: number) => from + (to - from) * t;
+
+export const easeInOut = (t: number) => (t < 0.5 ? 2 * t * t : 1 - Math.pow(-2 * t + 2, 2) / 2);
+
+interface Tween {
   duration: number;
   elapsed: number;
   onUpdate: (t: number) => void;
   resolve: () => void;
 }
 
-export const easeInOut = (t: number) => (t < 0.5 ? 2 * t * t : 1 - Math.pow(-2 * t + 2, 2) / 2);
-
 export class Tweens {
   private active: Tween[] = [];
+  private finished: Tween[] = [];
+
+  get count() {
+    return this.active.length;
+  }
 
   run(duration: number, onUpdate: (t: number) => void): Promise<void> {
     return new Promise((resolve) => {
@@ -17,19 +24,26 @@ export class Tweens {
   }
 
   wait(seconds: number): Promise<void> {
-    return this.run(seconds, () => {});
+    return this.run(seconds, () => undefined);
   }
 
   update(dt: number) {
-    const finished: Tween[] = [];
+    let kept = 0;
     for (const tween of this.active) {
       tween.elapsed += dt;
-      const t = Math.min(tween.elapsed / tween.duration, 1);
+      const t = tween.duration > 0 ? Math.min(tween.elapsed / tween.duration, 1) : 1;
       tween.onUpdate(t);
-      if (t >= 1) finished.push(tween);
+      if (t >= 1) this.finished.push(tween);
+      else this.active[kept++] = tween;
     }
-    if (finished.length === 0) return;
-    this.active = this.active.filter((tween) => !finished.includes(tween));
-    for (const tween of finished) tween.resolve();
+    this.active.length = kept;
+    for (const tween of this.finished) tween.resolve();
+    this.finished.length = 0;
+  }
+
+  cancelAll() {
+    const cancelled = this.active;
+    this.active = [];
+    for (const tween of cancelled) tween.resolve();
   }
 }

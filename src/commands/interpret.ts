@@ -8,7 +8,18 @@ export interface InterpretOptions {
 }
 
 function toIntent(candidate: Candidate, random: boolean): Intent {
-  return { kind: 'move', from: candidate.from, to: candidate.to, promotion: candidate.promotion, random };
+  return {
+    kind: 'move',
+    from: candidate.from,
+    to: candidate.to,
+    promotion: candidate.promotion,
+    random,
+  };
+}
+
+function pickRandom(candidates: Candidate[], random: () => number): Candidate {
+  const index = Math.min(Math.floor(random() * candidates.length), candidates.length - 1);
+  return candidates[index]!;
 }
 
 export async function interpret(
@@ -21,9 +32,7 @@ export async function interpret(
   if (candidates.length === 0) return { kind: 'none', message: 'The game is over' };
 
   const answer = await choose(buildChoiceRequest(transcript, game, candidates));
-  const chosen = candidates.find((c) => c.id === answer.choice);
+  const chosen = candidates.find((candidate) => candidate.id === answer.choice);
   if (chosen && answer.confidence >= minConfidence) return toIntent(chosen, false);
-
-  const fallback = candidates[Math.floor(random() * candidates.length)]!;
-  return toIntent(fallback, true);
+  return toIntent(pickRandom(candidates, random), true);
 }

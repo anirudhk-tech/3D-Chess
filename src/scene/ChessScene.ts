@@ -1,32 +1,76 @@
 import {
-  Vector3,
   AmbientLight,
   BoxGeometry,
-  Clock,
   Color as ThreeColor,
   DirectionalLight,
   Fog,
   Mesh,
   MeshStandardMaterial,
-  PCFSoftShadowMap,
+  PCFShadowMap,
   PerspectiveCamera,
   PlaneGeometry,
   Scene,
+  Timer,
+  Vector3,
   WebGLRenderer,
 } from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import type { MoveEvent, Piece } from '../engine/game';
-import { createPieceRig, type PieceRig } from './models';
 import { die, sink, strike, turnTo, walk, yawToward } from './animations';
-import { SQUARE_SIZE, squareToPosition } from './coords';
+import { BOARD_SQUARES, SQUARE_SIZE, fileRankToPosition, squareToPosition } from './coords';
 import { ParticleSystem } from './effects';
 import { fx } from './fx';
-import { FirstPersonController, type Obstacle } from './firstPerson';
+import { FirstPersonController, OVERVIEW_FOV, type Obstacle } from './firstPerson';
 import { IdleAnimator } from './idle';
+import { createPieceRig, disposeModelAssets, type PieceRig } from './models';
+import { CameraShake } from './shake';
 import { Tweens } from './tween';
 
 const STOP_SHORT = 0.75;
 const KNIGHT_HOP = 0.4;
+const KNOCKBACK = 0.3;
+const PAUSE_BEFORE_SINK = 0.3;
+const MAX_FRAME_SECONDS = 0.1;
+const MAX_PIXEL_RATIO = 2;
+const ROOK_OBSTACLE_RADIUS = 0.6;
+const PIECE_OBSTACLE_RADIUS = 0.33;
+
+const BACKGROUND_COLOR = 0x1a1c22;
+const FOG = { near: 14, far: 45 };
+const CAMERA = { near: 0.05, far: 120 };
+const OVERVIEW_POSITION = new Vector3(0, 9, 9);
+const ORBIT = { maxPolarAngle: Math.PI / 2.1, minDistance: 4, maxDistance: 25 };
+
+const SUN = {
+  position: new Vector3(6, 12, 5),
+  intensity: 2.2,
+  ambientIntensity: 0.55,
+  shadowMapSize: 2048,
+  shadowExtent: 7,
+  shadowNear: 4,
+  shadowFar: 32,
+  shadowBias: -0.0004,
+  shadowNormalBias: 0.02,
+};
+
+const BOARD = {
+  light: 0xd9c9a3,
+  dark: 0x7a5a3a,
+  frame: 0x3b2a1a,
+  ground: 0x2b2a24,
+  tileHeight: 0.2,
+  frameHeight: 0.3,
+  frameMargin: 0.8,
+  frameY: -0.25,
+  groundY: -0.45,
+  groundSize: 200,
+};
+
+export type ViewMode = 'walk' | 'overview';
+
+interface Disposable {
+  dispose(): void;
+}
 
 export class ChessScene {
   private renderer: WebGLRenderer;
@@ -34,113 +78,71 @@ export class ChessScene {
   private camera: PerspectiveCamera;
   private controls: OrbitControls;
   private firstPerson: FirstPersonController;
-  private clock = new Clock();
+  private timer = new Timer();
   private tweens = new Tweens();
   private idle = new IdleAnimator();
   private particles: ParticleSystem;
-  private shakeAmplitude = 0;
-  private shakeSeconds = 0;
-  private shakeRemaining = 0;
+  private cameraShake = new CameraShake();
   private shakeOffset = new Vector3();
   private rigs = new Map<string, PieceRig>();
+  private obstacleOf = new Map<PieceRig, Obstacle>();
+  private obstacleList: Obstacle[] = [];
+  private owned: Disposable[] = [];
+  private resizeObserver: ResizeObserver;
+  private epoch = 0;
 
-  constructor(container: HTMLElement) {
+  constructor(private container: HTMLElement) {
     this.renderer = new WebGLRenderer({ antialias: true });
-    this.renderer.setPixelRatio(window.devicePixelRatio);
+    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, MAX_PIXEL_RATIO));
     this.renderer.shadowMap.enabled = true;
-    this.renderer.shadowMap.type = PCFSoftShadowMap;
+    this.renderer.shadowMap.type = PCFShadowMap;
     container.appendChild(this.renderer.domElement);
 
-    this.scene.background = new ThreeColor(0x1a1c22);
-    this.scene.fog = new Fog(0x1a1c22, 14, 45);
-    this.camera = new PerspectiveCamera(45, 1, 0.05, 120);
-    this.camera.position.set(0, 9, 9);
+    this.scene.background = new ThreeColor(BACKGROUND_COLOR);
+    this.scene.fog = new Fog(BACKGROUND_COLOR, FOG.near, FOG.far);
+    this.camera = new PerspectiveCamera(OVERVIEW_FOV, 1, CAMERA.near, CAMERA.far);
 
     this.controls = new OrbitControls(this.camera, this.renderer.domElement);
-    this.controls.target.set(0, 0, 0);
     this.controls.enableDamping = true;
-    this.controls.maxPolarAngle = Math.PI / 2.1;
-    this.controls.minDistance = 4;
-    this.controls.maxDistance = 25;
+    this.controls.maxPolarAngle = ORBIT.maxPolarAngle;
+    this.controls.minDistance = ORBIT.minDistance;
+    this.controls.maxDistance = ORBIT.maxDistance;
 
     this.firstPerson = new FirstPersonController(
       this.camera,
       this.renderer.domElement,
-      () => this.obstacles(),
-      (running) => fx.playerStep(running),
+      () => this.obstacleList,
+      (running) => {
+        fx.playerStep(running);
+      },
     );
+    this.timer.connect(document);
     this.setView('walk');
 
     this.particles = new ParticleSystem(this.scene);
-    fx.attach(this.particles, (amplitude, seconds) => this.shake(amplitude, seconds));
+    fx.attach(this.particles, (amplitude, seconds) => {
+      this.cameraShake.trigger(amplitude, seconds);
+    });
 
     this.buildLights();
     this.buildBoard();
     this.buildGround();
 
-    window.addEventListener('resize', () => this.resize(container));
-    this.resize(container);
-    this.renderer.setAnimationLoop(() => this.frame());
+    this.resizeObserver = new ResizeObserver(() => {
+      this.resize();
+    });
+    this.resizeObserver.observe(container);
+    this.resize();
+    this.renderer.setAnimationLoop(() => {
+      this.frame();
+    });
   }
 
-  private buildLights() {
-    this.scene.add(new AmbientLight(0xffffff, 0.55));
-    const sun = new DirectionalLight(0xffffff, 2.2);
-    sun.position.set(6, 12, 5);
-    sun.castShadow = true;
-    sun.shadow.mapSize.set(2048, 2048);
-    sun.shadow.camera.left = -7;
-    sun.shadow.camera.right = 7;
-    sun.shadow.camera.top = 7;
-    sun.shadow.camera.bottom = -7;
-    this.scene.add(sun);
-  }
-
-  private buildBoard() {
-    const light = new MeshStandardMaterial({ color: 0xd9c9a3, roughness: 0.8 });
-    const dark = new MeshStandardMaterial({ color: 0x7a5a3a, roughness: 0.8 });
-    const geometry = new BoxGeometry(SQUARE_SIZE, 0.2, SQUARE_SIZE);
-    for (let file = 0; file < 8; file++) {
-      for (let rank = 0; rank < 8; rank++) {
-        const tile = new Mesh(geometry, (file + rank) % 2 === 0 ? dark : light);
-        tile.position.set((file - 3.5) * SQUARE_SIZE, -0.1, (3.5 - rank) * SQUARE_SIZE);
-        tile.receiveShadow = true;
-        this.scene.add(tile);
-      }
-    }
-    const frame = new Mesh(
-      new BoxGeometry(8 * SQUARE_SIZE + 0.8, 0.3, 8 * SQUARE_SIZE + 0.8),
-      new MeshStandardMaterial({ color: 0x3b2a1a, roughness: 0.7 }),
-    );
-    frame.position.y = -0.25;
-    frame.receiveShadow = true;
-    this.scene.add(frame);
-  }
-
-  private buildGround() {
-    const ground = new Mesh(
-      new PlaneGeometry(200, 200),
-      new MeshStandardMaterial({ color: 0x2b2a24, roughness: 1 }),
-    );
-    ground.rotation.x = -Math.PI / 2;
-    ground.position.y = -0.45;
-    ground.receiveShadow = true;
-    this.scene.add(ground);
-  }
-
-  private obstacles(): Obstacle[] {
-    return [...this.rigs.values()].map((rig) => ({
-      x: rig.root.position.x,
-      z: rig.root.position.z,
-      radius: rig.type === 'r' ? 0.6 : 0.33,
-    }));
-  }
-
-  get view(): 'walk' | 'overview' {
+  get view(): ViewMode {
     return this.firstPerson.enabled ? 'walk' : 'overview';
   }
 
-  setView(view: 'walk' | 'overview') {
+  setView(view: ViewMode) {
     if (view === 'walk') {
       this.controls.enabled = false;
       this.firstPerson.activate();
@@ -148,7 +150,7 @@ export class ChessScene {
     }
     this.firstPerson.deactivate();
     this.controls.enabled = true;
-    this.camera.position.set(0, 9, 9);
+    this.camera.position.copy(OVERVIEW_POSITION);
     this.controls.target.set(0, 0, 0);
     this.controls.update();
   }
@@ -157,37 +159,139 @@ export class ChessScene {
     this.setView(this.view === 'walk' ? 'overview' : 'walk');
   }
 
-  private resize(container: HTMLElement) {
-    const { clientWidth: w, clientHeight: h } = container;
-    this.renderer.setSize(w, h);
-    this.camera.aspect = w / h;
+  sync(pieces: Piece[]) {
+    this.epoch++;
+    this.tweens.cancelAll();
+    for (const rig of [...this.rigs.values()]) this.removeRig(rig);
+    for (const piece of pieces) this.addPiece(piece);
+  }
+
+  async animateMove(event: MoveEvent) {
+    const mover = this.rigs.get(event.mover.id);
+    if (!mover) return;
+    const epoch = this.epoch;
+    const victim = event.captured ? this.rigs.get(event.captured.id) : undefined;
+    const castleRook = event.castleRook ? this.rigs.get(event.castleRook.piece.id) : undefined;
+    const involved = [mover, victim, castleRook];
+    this.setBusy(involved, true);
+
+    try {
+      if (event.captured && victim) await this.attack(mover, victim, event);
+      else await this.march(mover, event);
+      if (castleRook && event.castleRook)
+        await walk(this.tweens, castleRook, squareToPosition(event.castleRook.to));
+    } finally {
+      this.setBusy(involved, false);
+    }
+
+    if (epoch !== this.epoch) return;
+    this.celebrate(event);
+    if (event.promotion) this.promote(mover, event, event.promotion);
+  }
+
+  dispose() {
+    this.epoch++;
+    this.renderer.setAnimationLoop(null);
+    this.resizeObserver.disconnect();
+    this.tweens.cancelAll();
+    this.timer.dispose();
+    this.firstPerson.dispose();
+    this.controls.dispose();
+    fx.detach();
+    this.particles.dispose();
+    for (const rig of [...this.rigs.values()]) this.removeRig(rig);
+    for (const resource of this.owned) resource.dispose();
+    this.owned = [];
+    disposeModelAssets();
+    this.scene.clear();
+    this.renderer.dispose();
+    this.renderer.domElement.remove();
+  }
+
+  private own<T extends Disposable>(resource: T): T {
+    this.owned.push(resource);
+    return resource;
+  }
+
+  private buildLights() {
+    this.scene.add(new AmbientLight(0xffffff, SUN.ambientIntensity));
+    const sun = new DirectionalLight(0xffffff, SUN.intensity);
+    sun.position.copy(SUN.position);
+    sun.castShadow = true;
+    sun.shadow.mapSize.set(SUN.shadowMapSize, SUN.shadowMapSize);
+    const { camera } = sun.shadow;
+    camera.left = -SUN.shadowExtent;
+    camera.right = SUN.shadowExtent;
+    camera.top = SUN.shadowExtent;
+    camera.bottom = -SUN.shadowExtent;
+    camera.near = SUN.shadowNear;
+    camera.far = SUN.shadowFar;
+    sun.shadow.bias = SUN.shadowBias;
+    sun.shadow.normalBias = SUN.shadowNormalBias;
+    this.scene.add(sun);
+  }
+
+  private buildBoard() {
+    const light = this.own(new MeshStandardMaterial({ color: BOARD.light, roughness: 0.8 }));
+    const dark = this.own(new MeshStandardMaterial({ color: BOARD.dark, roughness: 0.8 }));
+    const geometry = this.own(new BoxGeometry(SQUARE_SIZE, BOARD.tileHeight, SQUARE_SIZE));
+    for (let file = 0; file < BOARD_SQUARES; file++) {
+      for (let rank = 0; rank < BOARD_SQUARES; rank++) {
+        const tile = new Mesh(geometry, (file + rank) % 2 === 0 ? dark : light);
+        tile.position.copy(fileRankToPosition(file, rank, -BOARD.tileHeight / 2));
+        tile.receiveShadow = true;
+        this.scene.add(tile);
+      }
+    }
+    const frameSize = BOARD_SQUARES * SQUARE_SIZE + BOARD.frameMargin;
+    const frame = new Mesh(
+      this.own(new BoxGeometry(frameSize, BOARD.frameHeight, frameSize)),
+      this.own(new MeshStandardMaterial({ color: BOARD.frame, roughness: 0.7 })),
+    );
+    frame.position.y = BOARD.frameY;
+    frame.receiveShadow = true;
+    this.scene.add(frame);
+  }
+
+  private buildGround() {
+    const ground = new Mesh(
+      this.own(new PlaneGeometry(BOARD.groundSize, BOARD.groundSize)),
+      this.own(new MeshStandardMaterial({ color: BOARD.ground, roughness: 1 })),
+    );
+    ground.rotation.x = -Math.PI / 2;
+    ground.position.y = BOARD.groundY;
+    ground.receiveShadow = true;
+    this.scene.add(ground);
+  }
+
+  private resize() {
+    const { clientWidth: width, clientHeight: height } = this.container;
+    if (width === 0 || height === 0) return;
+    this.renderer.setSize(width, height);
+    this.camera.aspect = width / height;
     this.camera.updateProjectionMatrix();
   }
 
-  shake(amplitude: number, seconds: number) {
-    if (amplitude < this.shakeAmplitude * (this.shakeRemaining / Math.max(this.shakeSeconds, 0.001))) return;
-    this.shakeAmplitude = amplitude;
-    this.shakeSeconds = seconds;
-    this.shakeRemaining = seconds;
-  }
-
   private frame() {
-    const dt = this.clock.getDelta();
+    this.timer.update();
+    const dt = Math.min(this.timer.getDelta(), MAX_FRAME_SECONDS);
     this.tweens.update(dt);
     this.idle.update(dt, this.rigs.values());
     this.particles.update(dt);
+    this.trackObstacles();
 
     this.camera.position.sub(this.shakeOffset);
     if (this.firstPerson.enabled) this.firstPerson.update(dt);
     else this.controls.update();
-    this.shakeOffset.set(0, 0, 0);
-    if (this.shakeRemaining > 0) {
-      this.shakeRemaining = Math.max(this.shakeRemaining - dt, 0);
-      const strength = this.shakeAmplitude * (this.shakeRemaining / this.shakeSeconds);
-      this.shakeOffset.set((Math.random() - 0.5) * strength, (Math.random() - 0.5) * strength, (Math.random() - 0.5) * strength);
-      this.camera.position.add(this.shakeOffset);
-    }
+    this.camera.position.add(this.cameraShake.advance(dt, this.shakeOffset));
     this.renderer.render(this.scene, this.camera);
+  }
+
+  private trackObstacles() {
+    for (const [rig, obstacle] of this.obstacleOf) {
+      obstacle.x = rig.root.position.x;
+      obstacle.z = rig.root.position.z;
+    }
   }
 
   private addPiece(piece: Piece) {
@@ -195,18 +299,26 @@ export class ChessScene {
     rig.root.position.copy(squareToPosition(piece.square));
     this.scene.add(rig.root);
     this.rigs.set(piece.id, rig);
+    const obstacle = {
+      x: rig.root.position.x,
+      z: rig.root.position.z,
+      radius: rig.type === 'r' ? ROOK_OBSTACLE_RADIUS : PIECE_OBSTACLE_RADIUS,
+    };
+    this.obstacleOf.set(rig, obstacle);
+    this.obstacleList.push(obstacle);
+    return rig;
   }
 
-  private removePiece(id: string) {
-    const rig = this.rigs.get(id);
-    if (!rig) return;
+  private removeRig(rig: PieceRig) {
     this.scene.remove(rig.root);
-    this.rigs.delete(id);
-  }
-
-  sync(pieces: Piece[]) {
-    for (const id of [...this.rigs.keys()]) this.removePiece(id);
-    for (const piece of pieces) this.addPiece(piece);
+    const obstacle = this.obstacleOf.get(rig);
+    if (obstacle) {
+      this.obstacleOf.delete(rig);
+      this.obstacleList.splice(this.obstacleList.indexOf(obstacle), 1);
+    }
+    for (const [id, candidate] of this.rigs) {
+      if (candidate === rig) this.rigs.delete(id);
+    }
   }
 
   private setBusy(rigs: (PieceRig | undefined)[], busy: boolean) {
@@ -217,29 +329,19 @@ export class ChessScene {
     }
   }
 
-  async animateMove(event: MoveEvent) {
-    const mover = this.rigs.get(event.mover.id);
-    if (!mover) return;
-    const victim = event.captured && this.rigs.get(event.captured.id);
-    const castleRook = event.castleRook && this.rigs.get(event.castleRook.piece.id);
-    const involved = [mover, victim, castleRook];
-    this.setBusy(involved, true);
-
-    if (event.captured) await this.attack(mover, event);
-    else await this.march(mover, event);
-
-    if (castleRook) await walk(this.tweens, castleRook, squareToPosition(event.castleRook!.to));
-
-    this.setBusy(involved, false);
-
+  private celebrate(event: MoveEvent) {
     if (event.promotion) fx.promotion(squareToPosition(event.to));
     if (event.checkmate) fx.checkmate();
     else if (event.check) fx.check();
+  }
 
-    if (event.promotion) {
-      this.removePiece(event.mover.id);
-      this.addPiece({ ...event.mover, type: event.promotion, square: event.to });
-    }
+  private promote(
+    mover: PieceRig,
+    event: MoveEvent,
+    promotion: NonNullable<MoveEvent['promotion']>,
+  ) {
+    this.removeRig(mover);
+    this.addPiece({ ...event.mover, type: promotion, square: event.to });
   }
 
   private hopFor(rig: PieceRig) {
@@ -254,12 +356,9 @@ export class ChessScene {
     await turnTo(this.tweens, rig, rig.homeYaw);
   }
 
-  private async attack(attacker: PieceRig, event: MoveEvent) {
-    const victim = this.rigs.get(event.captured!.id);
+  private async attack(attacker: PieceRig, victim: PieceRig, event: MoveEvent) {
     const from = squareToPosition(event.from);
     const to = squareToPosition(event.to);
-    if (!victim) return this.march(attacker, event);
-
     const victimPosition = victim.root.position.clone();
     const approach = victimPosition.clone().sub(from).setY(0).normalize();
     const stopPoint = victimPosition.clone().addScaledVector(approach, -STOP_SHORT);
@@ -274,12 +373,14 @@ export class ChessScene {
     let falling: Promise<void> = Promise.resolve();
     await strike(this.tweens, attacker, () => {
       fx.hit(attacker, victimPosition);
-      falling = die(this.tweens, victim, approach.clone().multiplyScalar(0.3));
+      falling = die(this.tweens, victim, approach.clone().multiplyScalar(KNOCKBACK));
     });
     await falling;
-    await this.tweens.wait(0.3);
+    await this.tweens.wait(PAUSE_BEFORE_SINK);
 
-    const sinking = sink(this.tweens, victim).then(() => this.removePiece(event.captured!.id));
+    const sinking = sink(this.tweens, victim).then(() => {
+      this.removeRig(victim);
+    });
     await walk(this.tweens, attacker, to);
     await turnTo(this.tweens, attacker, attacker.homeYaw);
     await sinking;

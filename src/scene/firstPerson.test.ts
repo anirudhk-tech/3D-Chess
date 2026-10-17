@@ -1,6 +1,11 @@
 import { PerspectiveCamera } from 'three';
 import { describe, expect, it, vi } from 'vitest';
-import { ARENA_LIMIT, FirstPersonController, PLAYER_RADIUS, resolveCollisions } from './firstPerson';
+import {
+  ARENA_LIMIT,
+  FirstPersonController,
+  PLAYER_RADIUS,
+  resolveCollisions,
+} from './firstPerson';
 
 describe('resolveCollisions', () => {
   it('pushes the player out of an obstacle', () => {
@@ -10,13 +15,18 @@ describe('resolveCollisions', () => {
   });
 
   it('leaves the player alone when clear of obstacles', () => {
-    expect(resolveCollisions({ x: 3, z: 3 }, [{ x: 0, z: 0, radius: 0.35 }])).toEqual({ x: 3, z: 3 });
+    expect(resolveCollisions({ x: 3, z: 3 }, [{ x: 0, z: 0, radius: 0.35 }])).toEqual({
+      x: 3,
+      z: 3,
+    });
   });
 
   it('handles standing exactly on an obstacle centre', () => {
     const result = resolveCollisions({ x: 1, z: 1 }, [{ x: 1, z: 1, radius: 0.35 }]);
     expect(Number.isFinite(result.x)).toBe(true);
-    expect(Math.hypot(result.x - 1, result.z - 1)).toBeGreaterThanOrEqual(0.35 + PLAYER_RADIUS - 1e-9);
+    expect(Math.hypot(result.x - 1, result.z - 1)).toBeGreaterThanOrEqual(
+      0.35 + PLAYER_RADIUS - 1e-9,
+    );
   });
 
   it('keeps the player inside the arena', () => {
@@ -98,5 +108,48 @@ describe('FirstPersonController', () => {
     run(controller, 1);
     expect({ x: controller.x, z: controller.z }).toEqual({ x, z });
     expect(onStep).not.toHaveBeenCalled();
+  });
+});
+
+describe('FirstPersonController lifecycle', () => {
+  it('ignores input while deactivated', () => {
+    const { controller } = setup();
+    controller.deactivate();
+    const startZ = controller.z;
+    press('ArrowUp');
+    run(controller, 1);
+    expect(controller.z).toBe(startZ);
+  });
+
+  it('stops moving when the window loses focus mid-walk', () => {
+    const { controller } = setup();
+    press('ArrowUp');
+    run(controller, 0.5);
+    events.dispatchEvent(new Event('blur'));
+    run(controller, 1);
+    const settled = controller.z;
+    run(controller, 1);
+    expect(controller.z).toBe(settled);
+  });
+
+  it('stops responding to events once disposed', () => {
+    const { controller } = setup();
+    controller.dispose();
+    const startZ = controller.z;
+    press('ArrowUp');
+    run(controller, 1);
+    expect(controller.z).toBe(startZ);
+  });
+
+  it('walks backward slower than forward', () => {
+    const forward = setup().controller;
+    press('ArrowUp');
+    run(forward, 1);
+    press('ArrowUp', 'keyup');
+    const backward = setup().controller;
+    press('ArrowDown');
+    run(backward, 1);
+    press('ArrowDown', 'keyup');
+    expect(backward.z - 6.2).toBeLessThan(6.2 - forward.z);
   });
 });

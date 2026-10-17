@@ -1,20 +1,17 @@
-import { pieceName, type Game, type MoveEvent } from '../engine/game';
+import { capturedSquare, pieceName, type Game, type MoveEvent } from '../engine/game';
 import { analyzeMove } from './tactics';
 import type { Candidate, ChoiceRequest } from './types';
 
 export function buildCandidates(game: Game): Candidate[] {
   return game.legalMoves().map((move) => {
-    const mover = game.pieceAt(move.from)!;
-    const target = move.isEnPassant()
-      ? game.pieceAt((move.to[0]! + move.from[1]!) as typeof move.to)
-      : game.pieceAt(move.to);
+    const capturedFrom = capturedSquare(move);
     return {
       id: move.lan,
-      pieceId: mover.id,
+      pieceId: game.requirePieceAt(move.from).id,
       from: move.from,
       to: move.to,
       promotion: move.promotion,
-      capturesId: move.isCapture() ? target?.id : undefined,
+      capturesId: capturedFrom && game.requirePieceAt(capturedFrom).id,
     };
   });
 }
@@ -30,14 +27,15 @@ Back up, support or protect a piece means move so that piece is defended. That p
 function describePieces(game: Game): string[] {
   return game
     .pieces()
-    .map((p) => `${p.id}: ${p.color === 'w' ? 'white' : 'black'} ${pieceName(p.type)} on ${p.square}`);
+    .map(
+      (p) => `${p.id}: ${p.color === 'w' ? 'white' : 'black'} ${pieceName(p.type)} on ${p.square}`,
+    );
 }
 
 const RECENT_PLIES = 4;
 
-function describeCandidate(game: Game, c: Candidate): string {
+function describeCandidate(game: Game, c: Candidate, recent: MoveEvent[]): string {
   const tactics = analyzeMove(game, c);
-  const recent = game.recentMoves(RECENT_PLIES);
   const parts = [`${c.pieceId} moves from ${c.from} to ${c.to}`];
   if (c.capturesId) parts.push(`capturing ${c.capturesId}`);
   if (c.promotion) parts.push(`promoting to ${c.promotion}`);
@@ -58,17 +56,22 @@ function describeMove(event: MoveEvent): string {
   return `${event.mover.id} moved from ${event.from} to ${event.to}${capture}`;
 }
 
-export function buildChoiceRequest(transcript: string, game: Game, candidates: Candidate[]): ChoiceRequest {
+export function buildChoiceRequest(
+  transcript: string,
+  game: Game,
+  candidates: Candidate[],
+): ChoiceRequest {
+  const recent = game.recentMoves(RECENT_PLIES);
   return {
     state: {
       command: transcript,
       side_to_move: game.turn === 'w' ? 'white' : 'black',
       last_move: game.lastMove ? describeMove(game.lastMove) : 'none',
-      recent_moves: game.recentMoves(RECENT_PLIES).map(describeMove),
+      recent_moves: recent.map(describeMove),
       board_fen: game.fen,
       pieces: describePieces(game),
     },
     instructions: INSTRUCTIONS,
-    criteria: Object.fromEntries(candidates.map((c) => [c.id, describeCandidate(game, c)])),
+    criteria: Object.fromEntries(candidates.map((c) => [c.id, describeCandidate(game, c, recent)])),
   };
 }

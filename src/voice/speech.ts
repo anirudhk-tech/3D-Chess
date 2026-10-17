@@ -1,3 +1,5 @@
+import type { SpeechHandlers, VoiceInput } from './types';
+
 interface RecognitionAlternative {
   transcript: string;
 }
@@ -26,32 +28,37 @@ export interface RecognitionLike {
 
 export type RecognitionFactory = () => RecognitionLike;
 
-export interface SpeechHandlers {
-  onInterim: (text: string) => void;
-  onFinal: (text: string) => void;
-  onError: (message: string) => void;
-  onStateChange: (listening: boolean) => void;
+type RecognitionConstructor = new () => RecognitionLike;
+
+interface SpeechWindow {
+  SpeechRecognition?: RecognitionConstructor;
+  webkitSpeechRecognition?: RecognitionConstructor;
 }
+
+const MICROPHONE_DENIED = 'Microphone access was denied. Allow it in the browser address bar.';
+
+export const NETWORK_ERROR_MESSAGE = 'Speech service unreachable. Check your connection.';
 
 const ERROR_MESSAGES: Record<string, string> = {
-  'not-allowed': 'Microphone access was denied. Allow it in the browser address bar.',
-  'service-not-allowed': 'Microphone access was denied. Allow it in the browser address bar.',
+  'not-allowed': MICROPHONE_DENIED,
+  'service-not-allowed': MICROPHONE_DENIED,
   'no-speech': "Didn't hear anything. Try again.",
   'audio-capture': 'No microphone found.',
-  network: 'Speech service unreachable. Check your connection.',
+  network: NETWORK_ERROR_MESSAGE,
 };
 
-export function browserRecognitionFactory(): RecognitionFactory | undefined {
-  const Ctor = (window as unknown as { SpeechRecognition?: new () => RecognitionLike; webkitSpeechRecognition?: new () => RecognitionLike })
-    .SpeechRecognition ??
-    (window as unknown as { webkitSpeechRecognition?: new () => RecognitionLike }).webkitSpeechRecognition;
-  return Ctor ? () => new Ctor() : undefined;
+const SILENT_ERRORS = new Set(['aborted']);
+
+export function browserRecognitionFactory(
+  scope = window as SpeechWindow,
+): RecognitionFactory | undefined {
+  const Recognition = scope.SpeechRecognition ?? scope.webkitSpeechRecognition;
+  return Recognition ? () => new Recognition() : undefined;
 }
 
-export class SpeechInput {
+export class SpeechInput implements VoiceInput {
   private recognition?: RecognitionLike;
   private listening = false;
-  private heardFinal = false;
 
   constructor(
     private factory: RecognitionFactory,
@@ -69,31 +76,15 @@ export class SpeechInput {
     recognition.lang = this.lang;
     recognition.continuous = false;
     recognition.interimResults = true;
-    this.heardFinal = false;
-
-    recognition.onresult = (event) => {
-      let interim = '';
-      let final = '';
-      for (let i = event.resultIndex; i < event.results.length; i++) {
-        const result = event.results[i]!;
-        if (result.isFinal) final += result[0].transcript;
-        else interim += result[0].transcript;
-      }
-      if (final.trim()) {
-        this.heardFinal = true;
-        this.handlers.onFinal(final.trim());
-      } else if (interim.trim()) {
-        this.handlers.onInterim(interim.trim());
-      }
-    };
+    recognition.onresult = (event) => { this.handleResult(event); };
     recognition.onerror = (event) => {
-      this.handlers.onError(ERROR_MESSAGES[event.error] ?? `Speech recognition error: ${event.error}`);
+      if (!SILENT_ERRORS.has(event.error)) {
+        this.handlers.onError(
+          ERROR_MESSAGES[event.error] ?? `Speech recognition error: ${event.error}`,
+        );
+      }
     };
-    recognition.onend = () => {
-      this.listening = false;
-      this.recognition = undefined;
-      this.handlers.onStateChange(false);
-    };
+    recognition.onend = () => { this.end(recognition); };
 
     this.recognition = recognition;
     this.listening = true;
@@ -101,9 +92,7 @@ export class SpeechInput {
     try {
       recognition.start();
     } catch {
-      this.listening = false;
-      this.recognition = undefined;
-      this.handlers.onStateChange(false);
+      this.end(recognition);
       this.handlers.onError('Could not start the microphone.');
     }
   }
@@ -115,5 +104,31 @@ export class SpeechInput {
   toggle() {
     if (this.listening) this.stop();
     else this.start();
+  }
+
+  dispose() {
+    this.recognition?.abort();
+  }
+
+  private handleResult(event: RecognitionEvent) {
+    let interim = '';
+    let final = '';
+    for (let i = event.resultIndex; i < event.results.length; i++) {
+      const result = event.results[i]!;
+      if (result.isFinal) final += result[0].transcript;
+      else interim += result[0].transcript;
+    }
+    if (final.trim()) this.handlers.onFinal(final.trim());
+    else if (interim.trim()) this.handlers.onInterim(interim.trim());
+  }
+
+  private end(recognition: RecognitionLike) {
+    if (this.recognition !== recognition) return;
+    recognition.onresult = null;
+    recognition.onerror = null;
+    recognition.onend = null;
+    this.recognition = undefined;
+    this.listening = false;
+    this.handlers.onStateChange(false);
   }
 }

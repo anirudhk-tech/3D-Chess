@@ -46,4 +46,42 @@ describe('findBestMove', () => {
     const move = findBestMove('8/P6k/8/8/8/8/8/K7 w - - 0 1', quick)!;
     expect(move.promotion).toBe('q');
   });
+
+  it('scores a mate in one as one ply short of the mate value and stops deepening', () => {
+    const move = findBestMove('6k1/5ppp/8/8/8/8/5PPP/R5K1 w - - 0 1', {
+      maxDepth: 6,
+      timeMs: 5000,
+    })!;
+    expect(move.score).toBe(99_999);
+    expect(move.depth).toBe(1);
+  });
+
+  it('avoids stalemating when winning', () => {
+    const fen = '7k/8/5K2/8/8/8/8/6Q1 w - - 0 1';
+    const move = findBestMove(fen, quick)!;
+    const chess = new Chess(fen);
+    chess.move(move.san);
+    expect(chess.isStalemate()).toBe(false);
+  });
+
+  it('scores insufficient material as a draw', () => {
+    const move = findBestMove('8/8/4k3/8/8/4K3/8/7N w - - 0 1', quick)!;
+    expect(move.score).toBeCloseTo(0);
+  });
+
+  it('only searches queen promotions even when a capture promotion exists', () => {
+    const move = findBestMove('1r5k/P7/8/8/8/8/8/K7 w - - 0 1', quick)!;
+    expect(move.promotion).toBe('q');
+  });
+
+  it('returns a legal move even when the budget is exhausted immediately', () => {
+    const now = () => 1e12 * Math.random();
+    const fen = new Chess().fen();
+    const result = findBestMove(fen, { maxDepth: 6, timeMs: -1 }, now)!;
+    expect(new Chess(fen).moves({ verbose: true }).some((m) => m.san === result.san)).toBe(true);
+  });
+
+  it('throws on an invalid FEN', () => {
+    expect(() => findBestMove('garbage', quick)).toThrow();
+  });
 });

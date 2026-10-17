@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { Game } from '../engine/game';
 import { interpret } from './interpret';
+import { parseChoiceAnswer } from './jev';
 import { buildCandidates, buildChoiceRequest } from './prompt';
 
 describe('candidates', () => {
@@ -32,28 +33,56 @@ describe('interpret', () => {
   const options = { minConfidence: 0.5 };
 
   it('plays the chosen move when confident', async () => {
-    const intent = await interpret('advance the king pawn', new Game(), async () => ({ choice: 'e2e4', confidence: 0.9 }), options);
-    expect(intent).toEqual({ kind: 'move', from: 'e2', to: 'e4', promotion: undefined, random: false });
+    const intent = await interpret(
+      'advance the king pawn',
+      new Game(),
+      async () => ({ choice: 'e2e4', confidence: 0.9 }),
+      options,
+    );
+    expect(intent).toEqual({
+      kind: 'move',
+      from: 'e2',
+      to: 'e4',
+      promotion: undefined,
+      random: false,
+    });
   });
 
   it('moves at random when confidence is too low', async () => {
-    const intent = await interpret('mumble', new Game(), async () => ({ choice: 'e2e4', confidence: 0.1 }), {
-      ...options,
-      random: () => 0,
-    });
+    const intent = await interpret(
+      'mumble',
+      new Game(),
+      async () => ({ choice: 'e2e4', confidence: 0.1 }),
+      {
+        ...options,
+        random: () => 0,
+      },
+    );
     expect(intent).toMatchObject({ kind: 'move', random: true });
-    expect(buildCandidates(new Game())[0]).toMatchObject({ from: (intent as { from: string }).from });
+    expect(buildCandidates(new Game())[0]).toMatchObject({
+      from: (intent as { from: string }).from,
+    });
   });
 
   it('moves at random when the answer is not a legal move', async () => {
-    const intent = await interpret('x', new Game(), async () => ({ choice: 'e2e5', confidence: 0.99 }), options);
+    const intent = await interpret(
+      'x',
+      new Game(),
+      async () => ({ choice: 'e2e5', confidence: 0.99 }),
+      options,
+    );
     expect(intent).toMatchObject({ kind: 'move', random: true });
   });
 
   it('reports a finished game', async () => {
     const g = new Game();
     for (const m of ['f3', 'e5', 'g4', 'Qh4#']) g.move(m);
-    const intent = await interpret('anything', g, async () => ({ choice: '', confidence: 1 }), options);
+    const intent = await interpret(
+      'anything',
+      g,
+      async () => ({ choice: '', confidence: 1 }),
+      options,
+    );
     expect(intent.kind).toBe('none');
   });
 });
@@ -63,7 +92,9 @@ describe('tactics in criteria', () => {
     const g = new Game();
     for (const m of ['e4', 'd5', 'exd5']) g.move(m);
     const request = buildChoiceRequest('support', g, buildCandidates(g));
-    expect(request.state.last_move).toBe('white_pawn_e2 moved from e4 to d5, capturing black_pawn_d7');
+    expect(request.state.last_move).toBe(
+      'white_pawn_e2 moved from e4 to d5, capturing black_pawn_d7',
+    );
   });
 
   it('marks a move that backs up the piece that just moved', () => {
@@ -79,5 +110,102 @@ describe('tactics in criteria', () => {
     const request = buildChoiceRequest('attack', g, buildCandidates(g));
     expect(request.criteria.d2d4).toContain('threatening black_pawn_e7');
     expect(request.criteria.d2d4).toContain('ending next to');
+  });
+});
+
+describe('en passant and castling candidates', () => {
+  it('names the pawn removed by en passant', () => {
+    const g = new Game();
+    for (const m of ['e4', 'a6', 'e5', 'd5']) g.move(m);
+    const capture = buildCandidates(g).find((c) => c.id === 'e5d6');
+    expect(capture?.capturesId).toBe('black_pawn_d7');
+  });
+
+  it('lists each promotion as a separate candidate', () => {
+    const promotions = buildCandidates(new Game('8/P6k/8/8/8/8/8/K7 w - - 0 1')).filter(
+      (c) => c.from === 'a7',
+    );
+    expect(promotions.map((c) => c.id).sort()).toEqual(['a7a8b', 'a7a8n', 'a7a8q', 'a7a8r']);
+  });
+
+  it('judges the castled rook on its new square', () => {
+    const g = new Game('4k3/8/8/8/8/8/8/4K2R w K - 0 1');
+    const request = buildChoiceRequest('castle', g, buildCandidates(g));
+    expect(request.criteria.e1g1).toContain('defending');
+    expect(request.criteria.e1g1).toContain('ending next to white_rook_h1');
+  });
+
+  it('threatens a piece attacked from the destination square', () => {
+    const g = new Game('4k3/8/8/3p4/8/8/8/R3K3 w - - 0 1');
+    const request = buildChoiceRequest('attack', g, buildCandidates(g));
+    expect(request.criteria.a1a5).toContain('threatening black_pawn_d5');
+  });
+});
+
+describe('interpret edge cases', () => {
+  const options = { minConfidence: 0.5 };
+
+  it('never indexes past the candidate list when random returns 1', async () => {
+    const intent = await interpret(
+      'x',
+      new Game(),
+      async () => ({ choice: 'nope', confidence: 1 }),
+      {
+        ...options,
+        random: () => 1,
+      },
+    );
+    expect(intent).toMatchObject({ kind: 'move', random: true });
+  });
+
+  it('treats NaN confidence as not confident', async () => {
+    const intent = await interpret(
+      'x',
+      new Game(),
+      async () => ({ choice: 'e2e4', confidence: NaN }),
+      options,
+    );
+    expect(intent).toMatchObject({ random: true });
+  });
+
+  it('passes through promotion for the chosen move', async () => {
+    const intent = await interpret(
+      'queen it',
+      new Game('8/P6k/8/8/8/8/8/K7 w - - 0 1'),
+      async () => ({ choice: 'a7a8q', confidence: 1 }),
+      options,
+    );
+    expect(intent).toEqual({ kind: 'move', from: 'a7', to: 'a8', promotion: 'q', random: false });
+  });
+});
+
+describe('parseChoiceAnswer', () => {
+  it('reads a well formed response', () => {
+    expect(parseChoiceAnswer({ answers: { move: { choice: 'e2e4', confidence: 0.8 } } })).toEqual({
+      choice: 'e2e4',
+      confidence: 0.8,
+    });
+  });
+
+  it('defaults a missing or non-finite confidence to zero', () => {
+    expect(parseChoiceAnswer({ answers: { move: { choice: 'e2e4' } } }).confidence).toBe(0);
+    expect(
+      parseChoiceAnswer({ answers: { move: { choice: 'e2e4', confidence: 'high' } } }).confidence,
+    ).toBe(0);
+    expect(
+      parseChoiceAnswer({ answers: { move: { choice: 'e2e4', confidence: null } } }).confidence,
+    ).toBe(0);
+  });
+
+  it.each([
+    null,
+    'text',
+    {},
+    { answers: null },
+    { answers: {} },
+    { answers: { move: {} } },
+    { answers: { move: { choice: 4 } } },
+  ])('rejects malformed response %j', (body) => {
+    expect(() => parseChoiceAnswer(body)).toThrow('unexpected response');
   });
 });

@@ -10,13 +10,27 @@ export const DIFFICULTIES: Record<Difficulty, SearchOptions> = {
 
 export class Opponent {
   private worker?: Worker;
+  private thinking = false;
 
   choose(fen: string, difficulty: Difficulty): Promise<SearchResult | null> {
+    if (this.thinking) throw new Error('Opponent is already choosing a move');
     this.worker ??= new Worker(new URL('./worker.ts', import.meta.url), { type: 'module' });
     const worker = this.worker;
+    this.thinking = true;
     return new Promise((resolve, reject) => {
-      worker.onmessage = (event: MessageEvent<SearchResult | null>) => resolve(event.data);
-      worker.onerror = (event) => reject(new Error(event.message || 'Opponent crashed'));
+      const settle = () => {
+        this.thinking = false;
+        worker.onmessage = null;
+        worker.onerror = null;
+      };
+      worker.onmessage = (event: MessageEvent<SearchResult | null>) => {
+        settle();
+        resolve(event.data);
+      };
+      worker.onerror = (event) => {
+        settle();
+        reject(new Error(event.message || 'The opponent stopped unexpectedly'));
+      };
       worker.postMessage({ fen, options: DIFFICULTIES[difficulty] });
     });
   }

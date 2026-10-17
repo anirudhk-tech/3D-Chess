@@ -38,6 +38,11 @@ export class SoundBoard {
   private noise?: AudioBuffer;
   private mutedState = false;
 
+  duck(ducked: boolean) {
+    if (!this.ambientBus || !this.ctx) return;
+    this.ambientBus.gain.setTargetAtTime(ducked ? AMBIENT_LEVEL * 0.1 : AMBIENT_LEVEL, this.ctx.currentTime, 0.15);
+  }
+
   get muted() {
     return this.mutedState;
   }

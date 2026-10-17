@@ -31,6 +31,10 @@ class Fx {
     this.ambience.start();
   }
 
+  duckAmbience(ducked: boolean) {
+    this.sound.duck(ducked);
+  }
+
   setMuted(muted: boolean) {
     this.sound.setMuted(muted);
   }

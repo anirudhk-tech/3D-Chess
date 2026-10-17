@@ -4,6 +4,8 @@ import { fx } from './scene/fx';
 import { interpret } from './commands/interpret';
 import { chooseWithJev } from './commands/jev';
 import { DIFFICULTIES, Opponent, type Difficulty } from './opponent/opponent';
+import { SpeechInput, browserRecognitionFactory, type SpeechHandlers } from './voice/speech';
+import { RecordedSpeech, browserRecorderDeps } from './voice/recorded';
 
 const app = document.getElementById('app')!;
 app.innerHTML = `
@@ -15,6 +17,7 @@ app.innerHTML = `
       <option value="normal" selected>Normal</option>
       <option value="hard">Hard</option>
     </select>
+    <button id="mic" type="button" title="Click, or hold Space, and speak an order">Mic</button>
     <button id="sound" type="button">Sound: on</button>
     <span id="status"></span>
   </form>
@@ -28,6 +31,9 @@ style.textContent = `
   #command { position: absolute; left: 16px; bottom: 16px; display: flex; gap: 12px; align-items: center; }
   #move { padding: 10px 14px; width: 380px; font-size: 16px; border-radius: 8px; border: 1px solid #444; background: #262a33; color: #eee; }
   #level { padding: 10px 12px; font-size: 14px; border-radius: 8px; border: 1px solid #444; background: #262a33; color: #eee; }
+  #mic { padding: 10px 14px; font-size: 14px; border-radius: 8px; border: 1px solid #444; background: #262a33; color: #eee; cursor: pointer; }
+  #mic.listening { background: #b3261e; border-color: #e46962; }
+  #mic:disabled { opacity: 0.4; cursor: not-allowed; }
   #sound { padding: 10px 14px; font-size: 14px; border-radius: 8px; border: 1px solid #444; background: #262a33; color: #eee; cursor: pointer; }
   #status { color: #cfd3dc; font-size: 14px; }
 `;
@@ -96,10 +102,8 @@ async function playerMove(event: NonNullable<ReturnType<Game['move']>>, note = '
   await opponentTurn();
 }
 
-document.getElementById('command')!.addEventListener('submit', async (e) => {
-  e.preventDefault();
+async function handleCommand(text: string) {
   if (busy || game.turn !== PLAYER || game.status().over) return;
-  const text = input.value.trim();
   if (!text) return;
 
   const direct = game.move(text);
@@ -134,4 +138,77 @@ document.getElementById('command')!.addEventListener('submit', async (e) => {
   } finally {
     busy = false;
   }
+}
+
+document.getElementById('command')!.addEventListener('submit', (e) => {
+  e.preventDefault();
+  void handleCommand(input.value.trim());
 });
+
+const micButton = document.getElementById('mic') as HTMLButtonElement;
+
+interface Listener {
+  start(): void | Promise<void>;
+  stop(): void;
+  toggle(): void;
+}
+
+const speechHandlers: SpeechHandlers = {
+  onInterim: (text) => {
+    input.value = text;
+  },
+  onFinal: (text) => {
+    input.value = text;
+    void handleCommand(text);
+  },
+  onError: (message) => {
+    status.textContent = message;
+  },
+  onStateChange: (listening) => {
+    micButton.classList.toggle('listening', listening);
+    micButton.textContent = listening ? 'Listening...' : 'Mic';
+    fx.duckAmbience(listening);
+    if (listening) status.textContent = 'Listening...';
+  },
+};
+
+const browserFactory = browserRecognitionFactory();
+const canRecord = typeof MediaRecorder !== 'undefined' && !!navigator.mediaDevices?.getUserMedia;
+
+let speech: Listener | undefined;
+if (__OPENAI_STT_AVAILABLE__ && canRecord) {
+  speech = new RecordedSpeech(browserRecorderDeps(__OPENAI_STT_MODEL__), speechHandlers);
+} else if (browserFactory) {
+  speech = new SpeechInput(browserFactory, {
+    ...speechHandlers,
+    onError: (message) => {
+      status.textContent = message.includes('unreachable')
+        ? 'Your browser cannot reach its speech service. Add OPENAI_API_KEY to .env and restart the dev server to use OpenAI transcription instead.'
+        : message;
+    },
+  });
+}
+
+if (!speech) {
+  micButton.disabled = true;
+  micButton.title = 'Speech input is not available in this browser';
+} else {
+  const listener = speech;
+  const isTyping = (target: EventTarget | null) =>
+    target instanceof HTMLInputElement || target instanceof HTMLSelectElement || target instanceof HTMLTextAreaElement;
+
+  micButton.addEventListener('click', () => {
+    micButton.blur();
+    if (busy || game.turn !== PLAYER) return;
+    listener.toggle();
+  });
+  document.addEventListener('keydown', (event) => {
+    if (event.code !== 'Space' || event.repeat || isTyping(event.target) || busy || game.turn !== PLAYER) return;
+    event.preventDefault();
+    void listener.start();
+  });
+  document.addEventListener('keyup', (event) => {
+    if (event.code !== 'Space' || isTyping(event.target)) return;
+    listener.stop();
+  });
+}

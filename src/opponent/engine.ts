@@ -1,3 +1,5 @@
+// AI GENERATED CHESS OPPONENT ENGINE CODE. Plays at casual club level
+
 import { Chess, type Move, type PieceSymbol, type Square } from 'chess.js';
 
 export interface SearchOptions {

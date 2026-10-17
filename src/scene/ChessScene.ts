@@ -4,7 +4,6 @@ import {
   Clock,
   Color as ThreeColor,
   DirectionalLight,
-  Group,
   Mesh,
   MeshStandardMaterial,
   PCFSoftShadowMap,
@@ -14,11 +13,14 @@ import {
 } from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import type { MoveEvent, Piece } from '../engine/game';
-import { createPieceMesh } from './models';
+import { createPieceRig, type PieceRig } from './models';
+import { die, sink, strike, turnTo, walk, yawToward } from './animations';
 import { SQUARE_SIZE, squareToPosition } from './coords';
-import { Tweens, easeInOut } from './tween';
+import { IdleAnimator } from './idle';
+import { Tweens } from './tween';
 
-const MOVE_SECONDS = 0.8;
+const STOP_SHORT = 0.75;
+const KNIGHT_HOP = 0.4;
 
 export class ChessScene {
   private renderer: WebGLRenderer;
@@ -27,7 +29,8 @@ export class ChessScene {
   private controls: OrbitControls;
   private clock = new Clock();
   private tweens = new Tweens();
-  private meshes = new Map<string, Group>();
+  private idle = new IdleAnimator();
+  private rigs = new Map<string, PieceRig>();
 
   constructor(container: HTMLElement) {
     this.renderer = new WebGLRenderer({ antialias: true });
@@ -97,39 +100,54 @@ export class ChessScene {
   }
 
   private frame() {
-    this.tweens.update(this.clock.getDelta());
+    const dt = this.clock.getDelta();
+    this.tweens.update(dt);
+    this.idle.update(dt, this.rigs.values());
     this.controls.update();
     this.renderer.render(this.scene, this.camera);
   }
 
   private addPiece(piece: Piece) {
-    const mesh = createPieceMesh(piece.type, piece.color);
-    mesh.position.copy(squareToPosition(piece.square));
-    this.scene.add(mesh);
-    this.meshes.set(piece.id, mesh);
+    const rig = createPieceRig(piece.type, piece.color);
+    rig.root.position.copy(squareToPosition(piece.square));
+    this.scene.add(rig.root);
+    this.rigs.set(piece.id, rig);
   }
 
   private removePiece(id: string) {
-    const mesh = this.meshes.get(id);
-    if (!mesh) return;
-    this.scene.remove(mesh);
-    this.meshes.delete(id);
+    const rig = this.rigs.get(id);
+    if (!rig) return;
+    this.scene.remove(rig.root);
+    this.rigs.delete(id);
   }
 
   sync(pieces: Piece[]) {
-    for (const id of [...this.meshes.keys()]) this.removePiece(id);
+    for (const id of [...this.rigs.keys()]) this.removePiece(id);
     for (const piece of pieces) this.addPiece(piece);
   }
 
-  async animateMove(event: MoveEvent) {
-    const animations: Promise<void>[] = [
-      this.slide(event.mover.id, event.to, event.mover.type === 'n' ? 0.7 : 0),
-    ];
-    if (event.castleRook) {
-      animations.push(this.slide(event.castleRook.piece.id, event.castleRook.to, 0.4));
+  private setBusy(rigs: (PieceRig | undefined)[], busy: boolean) {
+    for (const rig of rigs) {
+      if (!rig) continue;
+      if (busy) this.idle.release(rig);
+      rig.busy = busy;
     }
-    if (event.captured) animations.push(this.destroy(event.captured.id));
-    await Promise.all(animations);
+  }
+
+  async animateMove(event: MoveEvent) {
+    const mover = this.rigs.get(event.mover.id);
+    if (!mover) return;
+    const victim = event.captured && this.rigs.get(event.captured.id);
+    const castleRook = event.castleRook && this.rigs.get(event.castleRook.piece.id);
+    const involved = [mover, victim, castleRook];
+    this.setBusy(involved, true);
+
+    if (event.captured) await this.attack(mover, event);
+    else await this.march(mover, event);
+
+    if (castleRook) await walk(this.tweens, castleRook, squareToPosition(event.castleRook!.to));
+
+    this.setBusy(involved, false);
 
     if (event.promotion) {
       this.removePiece(event.mover.id);
@@ -137,28 +155,44 @@ export class ChessScene {
     }
   }
 
-  private slide(id: string, to: Piece['square'], hop: number): Promise<void> {
-    const mesh = this.meshes.get(id);
-    if (!mesh) return Promise.resolve();
-    const start = mesh.position.clone();
-    const end = squareToPosition(to);
-    return this.tweens.run(MOVE_SECONDS, (t) => {
-      const e = easeInOut(t);
-      mesh.position.lerpVectors(start, end, e);
-      mesh.position.y = Math.sin(Math.PI * e) * hop;
-    });
+  private hopFor(rig: PieceRig) {
+    return rig.type === 'n' ? KNIGHT_HOP : 0;
   }
 
-  private async destroy(id: string) {
-    const mesh = this.meshes.get(id);
-    if (!mesh) return;
-    const delay = MOVE_SECONDS * 0.7;
-    await this.tweens.run(delay, () => {});
-    await this.tweens.run(0.5, (t) => {
-      mesh.rotation.z = t * (Math.PI / 2);
-      mesh.position.y = -t * 0.5;
-      mesh.scale.setScalar(1 - t * 0.9);
+  private async march(rig: PieceRig, event: MoveEvent) {
+    const from = squareToPosition(event.from);
+    const to = squareToPosition(event.to);
+    await turnTo(this.tweens, rig, yawToward(from, to));
+    await walk(this.tweens, rig, to, this.hopFor(rig));
+    await turnTo(this.tweens, rig, rig.homeYaw);
+  }
+
+  private async attack(attacker: PieceRig, event: MoveEvent) {
+    const victim = this.rigs.get(event.captured!.id);
+    const from = squareToPosition(event.from);
+    const to = squareToPosition(event.to);
+    if (!victim) return this.march(attacker, event);
+
+    const victimPosition = victim.root.position.clone();
+    const approach = victimPosition.clone().sub(from).setY(0).normalize();
+    const stopPoint = victimPosition.clone().addScaledVector(approach, -STOP_SHORT);
+
+    await Promise.all([
+      turnTo(this.tweens, attacker, yawToward(from, victimPosition)),
+      turnTo(this.tweens, victim, yawToward(victimPosition, from)),
+    ]);
+    await walk(this.tweens, attacker, stopPoint, this.hopFor(attacker));
+
+    let falling: Promise<void> = Promise.resolve();
+    await strike(this.tweens, attacker, () => {
+      falling = die(this.tweens, victim, approach.clone().multiplyScalar(0.3));
     });
-    this.removePiece(id);
+    await falling;
+    await this.tweens.wait(0.3);
+
+    const sinking = sink(this.tweens, victim).then(() => this.removePiece(event.captured!.id));
+    await walk(this.tweens, attacker, to);
+    await turnTo(this.tweens, attacker, attacker.homeYaw);
+    await sinking;
   }
 }

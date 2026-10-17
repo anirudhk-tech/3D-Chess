@@ -16,6 +16,10 @@ export class Tweens {
     });
   }
 
+  wait(seconds: number): Promise<void> {
+    return this.run(seconds, () => {});
+  }
+
   update(dt: number) {
     const finished: Tween[] = [];
     for (const tween of this.active) {

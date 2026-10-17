@@ -3,10 +3,13 @@ import {
   BufferGeometry,
   ConeGeometry,
   CylinderGeometry,
+  Euler,
   Group,
   Mesh,
   MeshStandardMaterial,
+  Object3D,
   SphereGeometry,
+  Vector3,
 } from 'three';
 import type { Color, PieceSymbol } from '../engine/game';
 
@@ -73,9 +76,17 @@ function arm(p: Palette, side: 1 | -1, shoulderY: number, shoulderX: number, len
   return pivot;
 }
 
-function legs(p: Palette, height = 0.4): Mesh[] {
+function legPivot(material: MeshStandardMaterial, x: number, topY: number, z: number, height: number, width: number, name: string): Group {
+  const pivot = new Group();
+  pivot.name = name;
+  pivot.position.set(x, topY, z);
+  pivot.add(part(box(width, height, width), material, [0, -height / 2, 0]));
+  return pivot;
+}
+
+function legs(p: Palette, height = 0.4): Group[] {
   return ([-1, 1] as const).map((side) =>
-    part(box(0.1, height, 0.1), p.accent, [side * 0.08, height / 2, 0], [0, 0, 0], side === 1 ? 'legR' : 'legL'),
+    legPivot(p.accent, side * 0.08, height, 0, height, 0.1, side === 1 ? 'legR' : 'legL'),
   );
 }
 
@@ -212,14 +223,14 @@ function knight(p: Palette): Group {
   horse.add(part(box(0.36, 0.12, 0.5), p.accent, [0, 0.62, -0.02]));
   for (const x of [-0.11, 0.11]) {
     for (const z of [-0.24, 0.24]) {
-      horse.add(part(box(0.08, 0.36, 0.08), p.cloth, [x, 0.18, z], [0, 0, 0], 'leg'));
+      horse.add(legPivot(p.cloth, x, 0.36, z, 0.36, 0.08, 'legHorse'));
     }
   }
   horse.add(part(box(0.16, 0.5, 0.18), p.cloth, [0, 0.82, 0.34], [0.5, 0, 0], 'neck'));
   horse.add(part(box(0.15, 0.17, 0.34), p.cloth, [0, 1.02, 0.55], [0.2, 0, 0], 'horseHead'));
   for (const x of [-0.05, 0.05]) horse.add(part(pyramid(0.04, 0.12, 3), p.cloth, [x, 1.17, 0.42]));
   horse.add(part(box(0.04, 0.4, 0.04), p.accent, [0, 0.94, 0.24], [0.5, 0, 0]));
-  horse.add(part(pyramid(0.1, 0.4, 3), p.accent, [0, 0.5, -0.46], [-2.3, 0, 0]));
+  horse.add(part(pyramid(0.1, 0.4, 3), p.accent, [0, 0.5, -0.46], [-2.3, 0, 0], 'tail'));
   g.add(horse);
 
   const rider = new Group();
@@ -252,11 +263,49 @@ const builders: Record<PieceSymbol, (p: Palette) => Group> = {
   n: knight,
 };
 
-export function createPieceMesh(type: PieceSymbol, color: Color): Group {
-  const outer = new Group();
+export interface RestPose {
+  rotation: Euler;
+  position: Vector3;
+}
+
+export interface PieceRig {
+  type: PieceSymbol;
+  root: Group;
+  facing: Group;
+  figure: Group;
+  homeYaw: number;
+  busy: boolean;
+  rest: Map<Object3D, RestPose>;
+  armL?: Group;
+  armR?: Group;
+  legs: Group[];
+  head?: Object3D;
+  neck?: Object3D;
+  horseHead?: Object3D;
+  tail?: Object3D;
+}
+
+export function createPieceRig(type: PieceSymbol, color: Color): PieceRig {
+  const root = new Group();
+  const facing = new Group();
   const figure = builders[type](palettes[color]);
-  figure.name = 'figure';
-  figure.rotation.y = color === 'w' ? Math.PI : 0;
-  outer.add(figure);
-  return outer;
+  const homeYaw = color === 'w' ? Math.PI : 0;
+  facing.rotation.y = homeYaw;
+  facing.add(figure);
+  root.add(facing);
+
+  const rig: PieceRig = { type, root, facing, figure, homeYaw, busy: false, rest: new Map(), legs: [] };
+  figure.traverse((node) => {
+    if (node.name === 'armL') rig.armL = node as Group;
+    else if (node.name === 'armR') rig.armR = node as Group;
+    else if (node.name.startsWith('leg')) rig.legs.push(node as Group);
+    else if (node.name === 'head') rig.head = node;
+    else if (node.name === 'neck') rig.neck = node;
+    else if (node.name === 'horseHead') rig.horseHead = node;
+    else if (node.name === 'tail') rig.tail = node;
+    else return;
+    node.userData.restX = node.rotation.x;
+    rig.rest.set(node, { rotation: node.rotation.clone(), position: node.position.clone() });
+  });
+  return rig;
 }

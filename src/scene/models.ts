@@ -128,26 +128,77 @@ function pawn(p: Palette): Group {
   return g;
 }
 
+function wheel(p: Palette, x: number, z: number): Group {
+  const group = new Group();
+  group.name = 'wheel';
+  group.position.set(x, 0.2, z);
+  group.add(part(new CylinderGeometry(0.2, 0.2, 0.1, 10), p.metal, [0, 0, 0], [0, 0, Math.PI / 2]));
+  group.add(part(box(0.14, 0.42, 0.06), p.accent));
+  group.add(part(box(0.14, 0.06, 0.42), p.accent));
+  return group;
+}
+
+function siegeTower(p: Palette): Group {
+  const height = 1.3;
+  const radiusAt = (y: number) => 0.44 - (0.14 * y) / height;
+  const tower = new Group();
+  tower.name = 'tower';
+  tower.position.y = 0.45;
+  tower.add(part(new CylinderGeometry(0.3, 0.44, height, 4), p.cloth, [0, height / 2, 0], [0, Math.PI / 4, 0], 'torso'));
+  for (const y of [0.25, 0.75]) {
+    const r = radiusAt(y) + 0.02;
+    tower.add(part(new CylinderGeometry(r, r, 0.07, 4), p.metal, [0, y, 0], [0, Math.PI / 4, 0]));
+  }
+  tower.add(part(box(0.7, 0.08, 0.7), p.metal, [0, height + 0.04, 0]));
+  for (const x of [-0.27, 0, 0.27]) {
+    for (const z of [-0.27, 0, 0.27]) {
+      if (x === 0 && z === 0) continue;
+      tower.add(part(box(0.14, 0.16, 0.14), p.metal, [x, height + 0.16, z]));
+    }
+  }
+  for (const side of [-1, 1]) {
+    tower.add(part(pyramid(0.07, 0.55, 4), p.metal, [side * 0.28, height + 0.45, 0], [0, 0, -side * 0.45]));
+    tower.add(part(box(0.13, 0.04, 0.03), p.gold, [side * 0.09, 0.92, 0.27], [0, 0, -side * 0.45]));
+  }
+  tower.add(part(box(0.32, 0.15, 0.05), p.accent, [0, 0.58, 0.272]));
+  for (const x of [-0.12, -0.04, 0.04, 0.12]) {
+    tower.add(part(pyramid(0.03, 0.08, 3), p.metal, [x, 0.65, 0.3], [Math.PI, 0, 0]));
+    tower.add(part(pyramid(0.03, 0.08, 3), p.metal, [x, 0.51, 0.3]));
+  }
+  tower.add(part(rod(0.015, 0.7), p.metal, [-0.24, height + 0.55, -0.24]));
+  tower.add(part(pyramid(0.12, 0.32, 3), p.accent, [-0.08, height + 0.7, -0.24], [0, 0, -Math.PI / 2]));
+  tower.add(part(box(0.09, 0.14, 0.05), p.cloth, [0.1, height + 0.3, 0.05]));
+  tower.add(part(pyramid(0.04, 0.09, 3), p.skin, [0.1, height + 0.42, 0.05], [Math.PI, 0, 0]));
+  return tower;
+}
+
 function rook(p: Palette): Group {
   const g = new Group();
-  g.add(...legs(p, 0.34).map((l) => ((l.scale.x = 1.5), (l.scale.z = 1.5), l)));
-  g.add(part(box(0.46, 0.46, 0.26), p.metal, [0, 0.57, 0], [0, 0, 0], 'torso'));
-  g.add(part(box(0.5, 0.1, 0.3), p.accent, [0, 0.38, 0]));
-  g.add(part(box(0.58, 0.12, 0.28), p.metal, [0, 0.84, 0]));
-  g.add(triangleHead(p, 0.95, 1));
-  const helm = new Group();
-  helm.position.y = 1.12;
-  helm.add(part(box(0.34, 0.12, 0.3), p.metal, [0, 0, 0]));
-  for (const x of [-0.12, 0, 0.12]) helm.add(part(box(0.07, 0.1, 0.07), p.metal, [x, 0.1, 0.11]));
-  for (const x of [-0.12, 0, 0.12]) helm.add(part(box(0.07, 0.1, 0.07), p.metal, [x, 0.1, -0.11]));
-  g.add(helm);
-  const right = arm(p, 1, 0.78, 0.31, 0.34);
-  const left = arm(p, -1, 0.78, 0.31, 0.34);
-  right.add(part(box(0.08, 0.44, 0.08), p.metal, [0.02, -0.34, 0.12], [0.4, 0, 0]));
-  right.add(part(box(0.2, 0.16, 0.16), p.metal, [0.02, -0.52, 0.2]));
-  left.add(part(box(0.06, 0.62, 0.34), p.accent, [-0.1, -0.3, 0.1]));
-  left.add(part(box(0.08, 0.5, 0.08), p.gold, [-0.13, -0.3, 0.1]));
-  g.add(right, left);
+  g.add(part(box(0.78, 0.2, 0.86), p.cloth, [0, 0.34, 0]));
+  g.add(part(box(0.82, 0.06, 0.9), p.accent, [0, 0.46, 0]));
+  for (const x of [-0.44, 0.44]) {
+    for (const z of [-0.28, 0.28]) g.add(wheel(p, x, z));
+  }
+  for (const side of [-1, 1]) {
+    for (const z of [-0.3, 0.05]) {
+      g.add(part(pyramid(0.06, 0.2, 4), p.metal, [side * 0.5, 0.4, z], [0, 0, -side * Math.PI / 2]));
+    }
+  }
+  g.add(siegeTower(p));
+
+  const ram = new Group();
+  ram.name = 'ram';
+  ram.position.set(0, 0.4, 0.05);
+  ram.add(part(rod(0.08, 0.8), p.cloth, [0, 0, 0], [Math.PI / 2, 0, 0]));
+  for (const z of [-0.2, 0.1]) {
+    ram.add(part(new CylinderGeometry(0.095, 0.095, 0.05, 8), p.metal, [0, 0, z], [Math.PI / 2, 0, 0]));
+  }
+  ram.add(part(pyramid(0.14, 0.26, 4), p.metal, [0, 0, 0.53], [Math.PI / 2, 0, 0]));
+  for (const side of [-1, 1]) {
+    ram.add(part(pyramid(0.04, 0.2, 3), p.metal, [side * 0.12, 0.08, 0.42], [Math.PI / 2 - 0.4, 0, -side * 0.3]));
+  }
+  g.add(ram);
+  g.scale.setScalar(0.9);
   return g;
 }
 
@@ -283,6 +334,9 @@ export interface PieceRig {
   neck?: Object3D;
   horseHead?: Object3D;
   tail?: Object3D;
+  wheels: Group[];
+  ram?: Group;
+  tower?: Group;
 }
 
 export function createPieceRig(type: PieceSymbol, color: Color): PieceRig {
@@ -294,7 +348,7 @@ export function createPieceRig(type: PieceSymbol, color: Color): PieceRig {
   facing.add(figure);
   root.add(facing);
 
-  const rig: PieceRig = { type, root, facing, figure, homeYaw, busy: false, rest: new Map(), legs: [] };
+  const rig: PieceRig = { type, root, facing, figure, homeYaw, busy: false, rest: new Map(), legs: [], wheels: [] };
   figure.traverse((node) => {
     if (node.name === 'armL') rig.armL = node as Group;
     else if (node.name === 'armR') rig.armR = node as Group;
@@ -303,7 +357,17 @@ export function createPieceRig(type: PieceSymbol, color: Color): PieceRig {
     else if (node.name === 'neck') rig.neck = node;
     else if (node.name === 'horseHead') rig.horseHead = node;
     else if (node.name === 'tail') rig.tail = node;
-    else return;
+    else if (node.name === 'wheel') {
+      rig.wheels.push(node as Group);
+      return;
+    } else if (node.name === 'ram') {
+      rig.ram = node as Group;
+      node.userData.restZ = node.position.z;
+      return;
+    } else if (node.name === 'tower') {
+      rig.tower = node as Group;
+      return;
+    } else return;
     node.userData.restX = node.rotation.x;
     rig.rest.set(node, { rotation: node.rotation.clone(), position: node.position.clone() });
   });

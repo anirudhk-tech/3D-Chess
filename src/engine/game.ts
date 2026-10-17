@@ -3,23 +3,18 @@ import { Chess, type Move, type PieceSymbol, type Color, type Square } from 'che
 export type { PieceSymbol, Color, Square };
 
 export interface Piece {
-  /** Stable for the whole game, e.g. "white_knight_b1" (named after the starting square). */
   id: string;
   type: PieceSymbol;
   color: Color;
   square: Square;
 }
 
-/** What happened in one move, in the form the 3D layer needs to animate it. */
 export interface MoveEvent {
   san: string;
-  /** Piece that moved. `type` is its type before any promotion. */
   mover: Piece;
   from: Square;
   to: Square;
-  /** Piece removed from the board, if any. For en passant its square differs from `to`. */
   captured?: Piece;
-  /** Rook relocated by castling. */
   castleRook?: { piece: Piece; from: Square; to: Square };
   promotion?: PieceSymbol;
   check: boolean;
